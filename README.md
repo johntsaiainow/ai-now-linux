@@ -1,79 +1,74 @@
 # AI-Now Linux
 
-**One Core. Multiple Profiles. Built from Source.**
+**Built from Source. Engineered for Intelligence.**
 
-AI-Now Linux is an independent Linux distribution project developed by AI-Now Technology, Inc., designed for personal computing, enterprise infrastructure, embedded systems, and dedicated AI appliances.
+*One Core. Multiple Targets. One Engineering Ecosystem.*
 
-Built upon Linux From Scratch (LFS), the project aims to establish a transparent, customizable, maintainable, and reproducible operating system platform.
+AI-Now Linux is an internal operating-system engineering platform developed by AI-Now Technology, Inc. It provides a source-built foundation for company workstations, AI infrastructure and embedded systems. It is not intended to compete with general-purpose public Linux distributions.
 
-## Project Objectives
+## Current milestone — v0.1 Genesis
 
-- Build an independent Linux system from source.
-- Develop a modular, profile-driven build system.
-- Integrate custom C, C++, and Python system utilities.
-- Support artificial intelligence and autonomous agent applications.
-- Explore Linux kernel customization and operating system engineering.
-- Provide a foundation for specialized commercial computing products.
+On November 26, 2026, Genesis booted independently in QEMU/KVM using its own Linux kernel, GRUB bootloader and native userspace. systemd reached multi-user.target with zero failed units; DHCP, gateway connectivity, native C compilation, Python execution and clean shutdown were demonstrated. A complete 80 GiB disk image was archived and verified by SHA256 against its decompressed contents.
 
-## Planned Build Profiles
-
-```bash
-./build.sh --profile personal
-./build.sh --profile enterprise
-./build.sh --profile embedded
-./build.sh --profile ai-appliance
-```
-
-| Profile | Target Environment |
+| Component | Version |
 |---|---|
-| Personal | Workstations and software development |
-| Enterprise | Servers and enterprise infrastructure |
-| Embedded | Embedded devices and industrial systems |
-| AI Appliance | Dedicated AI computing platforms |
+| Linux | 7.1.8-ainow-genesis |
+| GCC | 16.2.0 |
+| Binutils | 2.47 |
+| Glibc | 2.44 |
+| systemd | 261.2 |
+| Python | 3.14.7 |
+| GRUB | 2.14 |
+| Bash | 5.3 |
 
-All profiles are intended to share a common operating system foundation while maintaining independent package selections, kernel configurations, and system services.
+Genesis is an engineering baseline, not a production-ready release. Physical hardware compatibility and restored-image boot testing remain pending.
 
-## Technical Foundation
+## Design principles
 
-- Linux From Scratch 13.1-systemd
-- Linux Kernel
-- GNU Toolchain
-- GNU C Library
-- Systemd
-- GRUB
-- C / C++ / Python
-- QEMU / KVM
+- Source-first engineering with the option to install compatible binary packages.
+- One package installation engine and database for both source and binary workflows.
+- Git-managed recipes, patches and hardware configuration; authenticated binary distribution through release assets or an internal repository.
+- Hardware-specific kernels and firmware for company-owned devices rather than universal hardware coverage.
+- Terminal-native administration with optional graphical environments for engineering and creative work.
+- Reproducible build inputs, recorded tests, integrity verification and recoverable checkpoints.
 
-## Development Status
+## Target architecture
 
-**Target Release: v0.1.0 — Genesis**
+| Target | Intended role | Status |
+|---|---|---|
+| Genesis / QEMU | Development and recovery baseline | Boot demonstrated |
+| EeePC 1005P | First physical prototype | Next target |
+| Baihu | Engineering workstation and build host | Host in use; target OS planned |
+| Neris-A / Neris-D | Local AI and GPU compute | Planned |
+| Raspberry Pi / AION | Embedded devices | Future integration |
+| FPGA / Zynq | Industrial and heterogeneous computing | Future integration |
 
-Early development stage. The initial objective is a bootable, self-contained command-line Linux system.
+Hardware targets and software profiles are separate. Compatible binaries may be shared; architecture, CPU instruction set and ABI must be validated before deployment.
 
-- [x] Host system qualification
-- [x] Virtual disk preparation
-- [x] Source acquisition and verification
-- [ ] Build environment preparation
-- [ ] Cross-toolchain bootstrap
-- [ ] Base system compilation
-- [ ] Kernel configuration and compilation
-- [ ] First system boot
-- [ ] Automated build engine
-- [ ] Profile-based distribution builds
+## Roadmap
 
-## Engineering Documentation
+| Stage | Deliverable | Status |
+|---|---|---|
+| Genesis | Native toolchain, userspace, kernel, independent boot | Demonstrated |
+| Checkpoint 003 | Full bootable disk archive | Verified contents |
+| Package infrastructure | Source/binary build, install, remove, verify and Git distribution | Next |
+| OpenSSH | First managed package and remote administration | Planned |
+| EeePC | Hardware inventory, dedicated kernel, removable-media boot | Planned |
+| Deployment | ISO/USB builder, installer and recovery | Planned |
+| Graphics | DRM/KMS, graphics stack and desktop | Planned |
+| AI and embedded | GPU runtime, agents, Yocto/PetaLinux integration | Planned |
 
-Development journals, architectural decisions, build procedures, and verification results will be maintained in the `docs/` directory.
+The proposed package manager (`ainpkg`) will expose source and binary installation, package building, uploading and downloading, with CLI and terminal menu interfaces. These commands are not yet available.
 
-## Maintainer
+## Engineering records
 
-AI-Now Technology, Inc.
-California, United States
+- [Day 01 — Foundation](docs/journal/2026-11-24.md)
+- [Day 02 — Bootstrap](docs/journal/2026-11-25.md)
+- [Day 03 — The Birth of Genesis](docs/journal/2026-11-26.md)
 
-## License
+The project builds on Linux From Scratch (13.1-systemd) and upstream free/open-source software. Individual upstream components retain their respective licenses. Project-specific licensing remains to be finalized. Internal use does not remove applicable license obligations.
 
-Project licensing is under consideration. Upstream components retain their respective licenses.
+Disk images, private keys, credentials and machine-specific backups must not be committed to Git. Engineering records distinguish demonstrated results from planned features and conditional test acceptance.
 
----
-
-*From source code to independent systems.*
+**AI-Now Technology, Inc.**  
+*From Silicon to Intelligence.*
