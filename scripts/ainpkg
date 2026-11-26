@@ -1,0 +1,499 @@
+#!/usr/bin/env python3
+"""AI-Now Linux staged package builder and target-root package manager."""
+
+import argparse
+from contextlib import contextmanager
+import fcntl
+import hashlib
+import io
+import json
+import os
+from pathlib import Path
+import platform
+import re
+import shutil
+import sqlite3
+import stat
+import subprocess
+import sys
+import tarfile
+import tempfile
+import tomllib
+import urllib.request
+
+
+class PackageError(Exception):
+    pass
+
+
+SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]*")
+SHA256 = re.compile(r"[a-f0-9]{64}")
+TARGET_FIELDS = ("arch", "abi", "cpu")
+
+
+def identifier(value):
+    if not isinstance(value, str) or not SAFE_ID.fullmatch(value):
+        raise PackageError(f"invalid identifier: {value!r}")
+    return value
+
+
+def digest(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def file_digest(path):
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def payload_path(value):
+    if not isinstance(value, str):
+        raise PackageError("invalid package path")
+    parts = value.split("/")
+    if (len(parts) < 2 or parts[0] not in {"usr", "etc", "opt"}
+            or any(not part or part in {".", ".."} for part in parts)
+            or any(ord(char) < 32 for char in value)):
+        raise PackageError(f"invalid package path: {value!r}")
+    return value
+
+
+def destination(root, relative, create=False):
+    """Reject links in every target path component, including the final file."""
+    path = root / relative
+    for parent in reversed(path.parents):
+        if parent == root or root not in parent.parents:
+            continue
+        if parent.is_symlink() or (parent.exists() and not parent.is_dir()):
+            raise PackageError(f"unsafe target directory: {parent}")
+        if create and not parent.exists():
+            parent.mkdir(exist_ok=True)
+            sync_directory(parent.parent)
+    if path.is_symlink():
+        raise PackageError(f"unsafe target symlink: {path}")
+    return path
+
+
+def snapshot(path):
+    if not path.exists():
+        return None, None
+    info = path.stat()
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        raise PackageError(f"expected a regular, singly linked file: {path}")
+    return path.read_bytes(), stat.S_IMODE(info.st_mode)
+
+
+def sync_directory(path):
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def write_file(path, data, mode):
+    with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as stream:
+        temporary = Path(stream.name)
+        try:
+            stream.write(data)
+            stream.flush()
+            os.fchmod(stream.fileno(), mode)
+            os.fsync(stream.fileno())
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
+def archive_entries(archive_path):
+    # Bound decompressed input before tar parsing, including ignored padding.
+    with tempfile.TemporaryFile() as raw:
+        with subprocess.Popen(["zstd", "-dcq", "--", str(archive_path)],
+                              stdout=subprocess.PIPE) as decoder:
+            try:
+                size = 0
+                while chunk := decoder.stdout.read(1024 * 1024):
+                    size += len(chunk)
+                    if size > 128 * 1024 * 1024:
+                        raise PackageError("archive exceeds 128 MiB uncompressed")
+                    raw.write(chunk)
+                if decoder.wait():
+                    raise PackageError("invalid zstd archive")
+            finally:
+                if decoder.poll() is None:
+                    decoder.kill()
+        raw.seek(0)
+        with tarfile.open(fileobj=raw, mode="r:") as archive:
+            entries = {}
+            for member in archive:
+                if (not member.isfile() or member.issparse()
+                        or member.mode & ~0o777 or member.name in entries):
+                    raise PackageError(f"unsupported archive entry: {member.name}")
+                if member.name != "manifest.json":
+                    payload_path(member.name)
+                entries[member.name] = (archive.extractfile(member).read(), member.mode)
+    return entries
+
+
+def read_package(path):
+    entries = archive_entries(path)
+    manifest = json.loads(entries.pop("manifest.json")[0])
+    if not isinstance(manifest, dict) or manifest.get("format") != 1:
+        raise PackageError("unsupported package format")
+    for field in ("name", "version", *TARGET_FIELDS):
+        identifier(manifest[field])
+    files = manifest["files"]
+    if not isinstance(files, dict) or not files or files.keys() != entries.keys():
+        raise PackageError("payload does not match manifest")
+    for path, (data, mode) in entries.items():
+        if any(parent.as_posix() in entries for parent in Path(path).parents):
+            raise PackageError(f"conflicting file and directory: {path}")
+        if files[path] != {"sha256": digest(data), "mode": mode}:
+            raise PackageError(f"payload verification failed: {path}")
+    return manifest, entries
+
+
+def pack(output, metadata, stage):
+    entries = {}
+    for path in sorted(stage.rglob("*")):
+        info = path.lstat()
+        if stat.S_ISDIR(info.st_mode):
+            continue
+        relative = payload_path(path.relative_to(stage).as_posix())
+        data, mode = snapshot(path) if not path.is_symlink() else (None, None)
+        if data is None or mode & ~0o777:
+            raise PackageError(f"unsupported staged file: {relative}")
+        entries[relative] = (data, mode)
+    metadata["files"] = {
+        name: {"sha256": digest(data), "mode": mode}
+        for name, (data, mode) in entries.items()
+    }
+    entries["manifest.json"] = (json.dumps(metadata, sort_keys=True).encode(), 0o644)
+    with tempfile.TemporaryDirectory(dir=output.parent) as temporary:
+        raw = Path(temporary) / "package.tar"
+        compressed = Path(temporary) / "package.ainpkg"
+        with tarfile.open(raw, "w", format=tarfile.PAX_FORMAT) as archive:
+            for name, (data, mode) in sorted(entries.items()):
+                info = tarfile.TarInfo(name)
+                info.size = len(data)
+                info.mode = mode
+                archive.addfile(info, io.BytesIO(data))
+        subprocess.run(["zstd", "-q", "-o", str(compressed), str(raw)], check=True)
+        read_package(compressed)
+        os.link(compressed, output)
+
+
+def build(args):
+    if os.geteuid() == 0:
+        raise PackageError("run trusted recipe builds as an unprivileged user")
+    recipe = identifier(args.recipe)
+    subdir = f"packages/{recipe}"
+    revision = subprocess.check_output(
+        ["git", "-C", args.repo, "rev-parse", "--verify", "--end-of-options",
+         args.ref + "^{commit}"], text=True).strip()
+    with tempfile.TemporaryDirectory(prefix="ainpkg-build-") as temporary:
+        work = Path(temporary)
+        exported = subprocess.check_output(
+            ["git", "-C", args.repo, "archive", revision, subdir])
+        with tarfile.open(fileobj=io.BytesIO(exported), mode="r:") as archive:
+            archive.extractall(work, filter="data")
+        recipe_dir = work / subdir
+        with (recipe_dir / "recipe.toml").open("rb") as stream:
+            spec = tomllib.load(stream)
+        if spec["name"] != recipe:
+            raise PackageError("recipe name differs from Git directory")
+        arch = identifier(platform.machine())
+        abi = identifier(os.confstr("CS_GNU_LIBC_VERSION").replace(" ", "-"))
+        cpu = identifier(spec["cpu"][arch])
+        metadata = dict(format=1, name=recipe, version=identifier(spec["version"]),
+                        arch=arch, abi=abi, cpu=cpu, recipe_commit=revision)
+        pin = spec["source"]["sha256"]
+        if not SHA256.fullmatch(pin):
+            raise PackageError("invalid source SHA256 pin")
+        source = work / "source.tar"
+        if args.source:
+            shutil.copyfile(args.source, source)
+        else:
+            url = spec["source"]["url"]
+            if not url.startswith("https://"):
+                raise PackageError("recipe source must use HTTPS")
+            with urllib.request.urlopen(url, timeout=60) as response:
+                if not response.geturl().startswith("https://"):
+                    raise PackageError("source redirected away from HTTPS")
+                with source.open("wb") as stream:
+                    shutil.copyfileobj(response, stream)
+        if file_digest(source) != pin:
+            raise PackageError("source archive SHA256 mismatch")
+        stage = work / "stage"
+        stage.mkdir()
+        env = {
+            "PATH": "/usr/bin:/bin", "HOME": str(work), "LC_ALL": "C", "TZ": "UTC",
+            "DESTDIR": str(stage), "SOURCE_ARCHIVE": str(source),
+            "SOURCE_DATE_EPOCH": str(int(spec.get("source_date_epoch", 0))),
+            "JOBS": str(args.jobs), "AINPKG_ARCH": arch,
+        }
+        subprocess.run(["bash", str(recipe_dir / "build.sh")], cwd=work,
+                       env=env, check=True)
+        pack(args.output, metadata, stage)
+
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS target (arch TEXT, abi TEXT, cpu TEXT);
+CREATE TABLE IF NOT EXISTS packages (
+    name TEXT PRIMARY KEY, version TEXT NOT NULL, recipe_commit TEXT
+);
+CREATE TABLE IF NOT EXISTS files (
+    path TEXT PRIMARY KEY, package TEXT NOT NULL REFERENCES packages(name),
+    sha256 TEXT, mode INTEGER
+);
+CREATE TABLE IF NOT EXISTS undo (path TEXT PRIMARY KEY, data BLOB, mode INTEGER);
+"""
+
+
+def restore(root, db):
+    for path, data, mode in db.execute("SELECT path, data, mode FROM undo"):
+        dest = destination(root, payload_path(path), create=data is not None)
+        if data is None:
+            dest.unlink(missing_ok=True)
+        else:
+            write_file(dest, data, mode)
+        if dest.parent.is_dir():
+            sync_directory(dest.parent)
+    with db:
+        db.execute("DELETE FROM undo")
+
+
+@contextmanager
+def database(root, initialize=False):
+    if not root.is_dir() or root.absolute() != root.resolve() or root.resolve() == Path("/"):
+        raise PackageError("use an existing, explicit, non-symlink target directory other than /")
+    root = root.resolve()
+    state = destination(root, "var/lib/ainpkg/state.sqlite", create=initialize)
+    if not initialize and not state.is_file():
+        raise PackageError("target is not initialized")
+    lock = destination(root, "var/lib/ainpkg/lock")
+    fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "rb") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        for name in ("state.sqlite", "state.sqlite-journal", "state.sqlite-wal", "state.sqlite-shm"):
+            snapshot_path = destination(root, f"var/lib/ainpkg/{name}")
+            if snapshot_path.exists() and (not snapshot_path.is_file()
+                                          or snapshot_path.stat().st_nlink != 1):
+                raise PackageError(f"unsafe database file: {snapshot_path}")
+        db = sqlite3.connect(state)
+        try:
+            db.execute("PRAGMA foreign_keys = ON")
+            db.executescript(SCHEMA)
+            restore(root, db)
+            yield root, db
+        finally:
+            db.close()
+
+
+def change_files(root, db, changes, update_database):
+    # Journal preimages before writing. The next command recovers interrupted changes.
+    with db:
+        db.executemany("INSERT INTO undo VALUES (?, ?, ?)",
+                       [(path, *before) for path, (before, _) in changes.items()])
+    try:
+        for path, (_, after) in changes.items():
+            dest = destination(root, path, create=after is not None)
+            if after is None:
+                dest.unlink()
+            else:
+                write_file(dest, *after)
+            sync_directory(dest.parent)
+        with db:
+            update_database()
+            db.execute("DELETE FROM undo")
+    except BaseException:
+        restore(root, db)
+        raise
+
+
+def matches(content, checksum, mode):
+    data, actual_mode = content
+    return data is not None and digest(data) == checksum and actual_mode == mode
+
+
+def install(root, db, archive):
+    manifest, entries = read_package(archive)
+    if tuple(manifest[field] for field in TARGET_FIELDS) != db.execute(
+            "SELECT arch, abi, cpu FROM target").fetchone():
+        raise PackageError("package architecture, ABI or CPU baseline differs from target")
+    name = manifest["name"]
+    old = {path: (checksum, mode) for path, checksum, mode in db.execute(
+        "SELECT path, sha256, mode FROM files WHERE package = ?", (name,))}
+    owned = dict(db.execute("SELECT path, package FROM files"))
+    incoming_dirs = {parent.as_posix() for path in entries for parent in Path(path).parents}
+    owned_dirs = {parent.as_posix() for path in owned for parent in Path(path).parents}
+    if incoming_dirs.intersection(owned) or owned_dirs.intersection(entries):
+        raise PackageError("incoming path conflicts with an owned file or its directory")
+    changes, records, preserved = {}, [], []
+    for path in sorted(entries.keys() | old.keys()):
+        if path in owned and owned[path] != name:
+            raise PackageError(f"{path} is owned by {owned[path]}")
+        before = snapshot(destination(root, path))
+        baseline = old.get(path, (None, None))
+        if before[0] is not None and not matches(before, *baseline):
+            if not path.startswith("etc/"):
+                raise PackageError(f"would overwrite or remove unmanaged or modified file: {path}")
+            preserved.append(path)
+        elif path in entries:
+            data, mode = entries[path]
+            baseline = (digest(data), mode)
+            changes[path] = (before, (data, mode))
+        elif before[0] is not None:
+            changes[path] = (before, None)
+        if path in entries:
+            records.append((path, name, *baseline))
+
+    def update():
+        db.execute("INSERT INTO packages VALUES (?, ?, ?) ON CONFLICT(name) DO UPDATE "
+                   "SET version=excluded.version, recipe_commit=excluded.recipe_commit",
+                   (name, manifest["version"], manifest.get("recipe_commit")))
+        db.execute("DELETE FROM files WHERE package = ?", (name,))
+        db.executemany("INSERT INTO files VALUES (?, ?, ?, ?)", records)
+
+    change_files(root, db, changes, update)
+    for path in preserved:
+        print(f"preserved config: /{path}")
+    print(f"installed {name} {manifest['version']}")
+
+
+def remove(root, db, name):
+    if not db.execute("SELECT 1 FROM packages WHERE name = ?", (name,)).fetchone():
+        raise PackageError(f"package is not installed: {name}")
+    changes, preserved = {}, []
+    for path, checksum, mode in db.execute(
+            "SELECT path, sha256, mode FROM files WHERE package = ?", (name,)):
+        before = snapshot(destination(root, path))
+        if matches(before, checksum, mode):
+            changes[path] = (before, None)
+        elif before[0] is not None:
+            preserved.append(path)
+
+    def update():
+        db.execute("DELETE FROM files WHERE package = ?", (name,))
+        db.execute("DELETE FROM packages WHERE name = ?", (name,))
+
+    change_files(root, db, changes, update)
+    for path in preserved:
+        print(f"preserved modified file: /{path}")
+    print(f"removed {name}")
+
+
+def verify(root, db, name):
+    if name and not db.execute("SELECT 1 FROM packages WHERE name = ?", (name,)).fetchone():
+        raise PackageError(f"package is not installed: {name}")
+    failed = False
+    for path, checksum, mode in db.execute(
+            "SELECT path, sha256, mode FROM files WHERE ? IS NULL OR package = ? ORDER BY path",
+            (name, name)):
+        before = snapshot(destination(root, path))
+        if matches(before, checksum, mode):
+            continue
+        if before[0] is None:
+            status = "missing"
+        elif path.startswith("etc/"):
+            status = "config modified"
+        else:
+            status = "modified"
+        print(f"{status}: /{path}")
+        failed |= status != "config modified"
+    return int(failed)
+
+
+def release(args):
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", args.repository):
+        raise PackageError("expected GitHub repository in owner/name form")
+    archive = args.archive
+    if not archive.name.endswith(".ainpkg") or not SAFE_ID.fullmatch(archive.name):
+        raise PackageError("expected a safe .ainpkg asset filename")
+    tag = identifier(args.tag)
+    if args.command == "upload":
+        with tempfile.TemporaryDirectory() as temporary:
+            asset = Path(temporary) / archive.name
+            shutil.copyfile(archive, asset)
+            read_package(asset)
+            checksum = file_digest(asset)
+            subprocess.run(["gh", "release", "upload", tag, str(asset),
+                            "--repo", args.repository], check=True)
+        print(f"sha256: {checksum}")
+    else:
+        if not SHA256.fullmatch(args.sha256):
+            raise PackageError("expected trusted lowercase SHA256")
+        with tempfile.TemporaryDirectory(dir=archive.parent) as temporary:
+            subprocess.run(["gh", "release", "download", tag, "--repo", args.repository,
+                            "--pattern", archive.name, "--dir", temporary], check=True)
+            downloaded = Path(temporary) / archive.name
+            if file_digest(downloaded) != args.sha256:
+                raise PackageError("release asset SHA256 mismatch")
+            read_package(downloaded)
+            os.link(downloaded, archive)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--root", type=Path, help="explicit offline target root")
+    commands = parser.add_subparsers(dest="command", required=True)
+    init = commands.add_parser("init")
+    for field in TARGET_FIELDS:
+        init.add_argument(f"--{field}", required=True, type=identifier)
+    source = commands.add_parser("build")
+    source.add_argument("recipe")
+    source.add_argument("--repo", default=".")
+    source.add_argument("--ref", default="HEAD")
+    source.add_argument("--source", type=Path, help="cached upstream archive, still hash checked")
+    source.add_argument("--output", required=True, type=Path)
+    source.add_argument("--jobs", default=1, type=int, choices=range(1, 129), metavar="1..128")
+    commands.add_parser("install").add_argument("archive", type=Path)
+    commands.add_parser("remove").add_argument("name", type=identifier)
+    commands.add_parser("verify").add_argument("name", nargs="?", type=identifier)
+    commands.add_parser("owner").add_argument("path")
+    commands.add_parser("list")
+    for command in ("upload", "download"):
+        subparser = commands.add_parser(command)
+        subparser.add_argument("repository")
+        subparser.add_argument("tag")
+        subparser.add_argument("archive", type=Path)
+        if command == "download":
+            subparser.add_argument("--sha256", required=True)
+    args = parser.parse_args()
+    if args.command == "build":
+        return build(args)
+    if args.command in {"upload", "download"}:
+        return release(args)
+    if args.root is None:
+        parser.error("--root is required for target operations")
+    with database(args.root, args.command == "init") as (root, db):
+        if args.command == "init":
+            target = (args.arch, args.abi, args.cpu)
+            previous = db.execute("SELECT arch, abi, cpu FROM target").fetchone()
+            if previous and previous != target:
+                raise PackageError("target already initialized with a different compatibility tuple")
+            if not previous:
+                with db:
+                    db.execute("INSERT INTO target VALUES (?, ?, ?)", target)
+        elif args.command == "install":
+            return install(root, db, args.archive)
+        elif args.command == "remove":
+            return remove(root, db, args.name)
+        elif args.command == "verify":
+            return verify(root, db, args.name)
+        elif args.command == "owner":
+            row = db.execute("SELECT package FROM files WHERE path = ?",
+                             (payload_path(args.path.removeprefix("/")),)).fetchone()
+            if row is None:
+                raise PackageError(f"no package owns {args.path}")
+            print(row[0])
+        else:
+            for name, version in db.execute("SELECT name, version FROM packages ORDER BY name"):
+                print(f"{name}\t{version}")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except (PackageError, OSError, ValueError, KeyError, TypeError, AttributeError,
+            IndexError, sqlite3.Error, subprocess.CalledProcessError, tarfile.TarError) as error:
+        sys.exit(f"ainpkg: {error}")

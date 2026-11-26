@@ -51,20 +51,20 @@ Hardware targets and software profiles are separate. Compatible binaries may be 
 |---|---|---|
 | Genesis | Native toolchain, userspace, kernel, independent boot | Demonstrated |
 | Checkpoint 003 | Full bootable disk archive | Verified contents |
-| Package infrastructure | Source/binary build, install, remove, verify and Git distribution | Next |
-| OpenSSH | First managed package and remote administration | Planned |
+| Package infrastructure | Chapter 11 staged build, local install/remove/verify, Git recipes and GitHub asset commands | Prototype tested in disposable roots |
+| OpenSSH | First managed package and remote administration | Recipe and host smoke test complete; Genesis deployment pending |
 | EeePC | Hardware inventory, dedicated kernel, removable-media boot | Planned |
 | Deployment | ISO/USB builder, installer and recovery | Planned |
 | Graphics | DRM/KMS, graphics stack and desktop | Planned |
 | AI and embedded | GPU runtime, agents, Yocto/PetaLinux integration | Planned |
 
-The proposed package manager (`ainpkg`) will expose source and binary installation, package building, uploading and downloading, with CLI and terminal menu interfaces. These commands are not yet available.
+[Chapter 11 · ainpkg](docs/packages/ainpkg.md) documents the CLI, format, target-root workflow and test commands. Source builds and compatible binaries share one SQLite package database. The terminal menu remains planned.
 
 ## Engineering records
 
 - [Day 01 — Foundation](docs/journal/2026-11-24.md)
 - [Day 02 — Bootstrap](docs/journal/2026-11-25.md)
-- [Day 03 — The Birth of Genesis](docs/journal/2026-11-26.md)
+- [Day 03 — The Birth of Genesis and Chapter 11](docs/journal/2026-11-26.md)
 
 The project builds on Linux From Scratch (13.1-systemd) and upstream free/open-source software. Individual upstream components retain their respective licenses. Project-specific licensing remains to be finalized. Internal use does not remove applicable license obligations.
 

@@ -1,0 +1,10 @@
+name = "openssh"
+version = "10.6p2"
+source_date_epoch = 1793836800
+
+[cpu]
+x86_64 = "x86-64-v1"
+
+[source]
+url = "https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-10.6p2.tar.gz"
+sha256 = "9ae44872090cf2f06b3cf9ff147e7f16f309671340763ed2f99248398ae29d5b"
