@@ -103,7 +103,7 @@ safe_mount -t proc proc "$LFS/proc"
 safe_mount -t sysfs sysfs "$LFS/sys"
 
 safe_mount -t tmpfs tmpfs \
-    -o nosuid,nodev "$LFS/run"
+    -o nosuid,nodev,mode=0755 "$LFS/run"
 
 if [[ -L "$LFS/dev/shm" ]]; then
     SHM_PATH="$(realpath /dev/shm)"
