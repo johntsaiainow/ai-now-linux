@@ -42,6 +42,7 @@ case "$AINPKG_PACKAGE" in
             install -D -m "$(stat -c %a "$image/$path")" "$image/$path" "$DESTDIR/$path"
         done
         install -Dm755 "$image/usr/bin/ssh-keygen" "$DESTDIR/usr/libexec/openssh/ssh-keygen"
+        install -Dm755 "$recipe_dir/prepare-server.sh" "$DESTDIR/usr/libexec/openssh/prepare-server"
         install -Dm644 "$recipe_dir/sshd.service" "$DESTDIR/usr/lib/systemd/system/sshd.service"
         install -Dm644 "$recipe_dir/openssh-server.sysusers" "$DESTDIR/usr/lib/sysusers.d/openssh-server.conf"
         install -Dm644 "$recipe_dir/openssh-server.tmpfiles" "$DESTDIR/usr/lib/tmpfiles.d/openssh-server.conf"

@@ -60,12 +60,10 @@ scripts/ainpkg build openssh --ref "$ref" --package openssh-server \
 
 When upgrading from a managed combined `openssh` package, preview and install the new client package first so it releases the old daemon paths, then install `openssh-server`. The installer preserves edited server configuration during that transition.
 
-For a prepared systemd target, boot applies the packaged sysusers and tmpfiles rules, which provision the `sshd` account and the root-owned `/var/empty/sshd` directory. On an already booted test target where the files are available in their installed locations, run the rules explicitly before manually starting the service:
+Systemd targets with sysusers and tmpfiles apply the packaged provisioning rules at boot. Genesis has sysusers disabled. The service runs its packaged `prepare-server` helper before generating keys. The helper uses Shadow's `useradd` when the local `sshd` account is absent and ensures that `/var/empty/sshd` is root-owned with mode 0755. To provision an existing offline target with a populated account database, run the helper explicitly:
 
 ```bash
-systemd-sysusers openssh-server.conf
-systemd-tmpfiles --create openssh-server.conf
-systemctl daemon-reload
+"$root/usr/libexec/openssh/prepare-server" --root "$root"
 ```
 
 The service is opt-in. Review the target's authentication settings and intended listeners before starting it. On first start, the unit generates missing host keys and validates the configuration before running the daemon. Removing the package leaves generated host keys and the system account in place. Stop the service before package removal.
