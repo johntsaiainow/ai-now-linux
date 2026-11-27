@@ -73,3 +73,11 @@ bash -n scripts/build-kernel-profile.sh
 ```
 
 Installer tests use small synthetic images and exercise previews, exact copy, input validation, rejection of existing paths and interactive disk confirmation. These tests do not boot a system or access a physical drive.
+
+## Planned offline Wi-Fi setup on the EeePC
+
+The next rescue and deployment media must include NetworkManager with its `nmtui` interface, the D-Bus service integration, and `wpa_supplicant` as its Wi-Fi backend. Build and stage the packages and their runtime dependencies against the Genesis ABI before generating the images. Use the verified hardware interfaces `enp1s0` and `wlp2s0` for acceptance.
+
+NetworkManager will handle Wi-Fi authentication and DHCP on the EeePC. Disable networkd on this image only after confirming NetworkManager is installed and configured to take over its interfaces. Check resolver integration with the existing Genesis setup. Keep Wi-Fi credentials out of the build inputs and published images.
+
+Acceptance on the physical EeePC: open `nmtui`, activate a test Wi-Fi network, confirm IPv4 via DHCP and DNS resolution, then reach the LAN endpoint on Neris-A. Repeat after reboot on the deployment target. These are pending tasks.
