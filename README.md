@@ -51,8 +51,8 @@ Hardware targets and software profiles are separate. Compatible binaries may be 
 |---|---|---|
 | Genesis | Native toolchain, userspace, kernel, independent boot | Demonstrated |
 | Checkpoint 003 | Full bootable disk archive | Verified contents |
-| Package infrastructure | Chapter 11 staged build, local install/remove/verify, Git recipes and GitHub asset commands | Prototype tested in disposable roots |
-| OpenSSH | First managed package and remote administration | Recipe and host smoke test complete; Genesis deployment pending |
+| Package infrastructure | Chapter 11 staged build, install/remove/verify, Git recipes and GitHub asset transfer | Genesis and draft Release round-trip accepted |
+| OpenSSH | Managed client and server packages | Genesis loopback SSH accepted; persistent service deployment pending |
 | EeePC | Hardware inventory, dedicated kernel, removable-media boot | Planned |
 | Deployment | ISO/USB builder, installer and recovery | Planned |
 | Graphics | DRM/KMS, graphics stack and desktop | Planned |
