@@ -16,6 +16,16 @@ The builder reads `packages/openssh/{recipe.toml,build.sh}` from the committed G
 
 The package format is zstd-compressed tar with a JSON manifest and sorted regular-file payloads under `usr/`, `etc/` or `opt/`. Package entries have normalized archive ownership and timestamps. Packages record the recipe commit, versions, compatibility tuple, file modes and SHA256 checksums. The installer checks exact Linux machine architecture, glibc version label and CPU baseline labels. The operator establishes the offline root's identity and separately checks its runtime libraries and actual CPU support. Dependency resolution, ELF validation and managed links are outside this milestone.
 
+## Inspect a package and preview changes
+
+```bash
+scripts/ainpkg inspect ./openssh.ainpkg
+scripts/ainpkg --root "$root" install ./openssh.ainpkg --dry-run
+scripts/ainpkg --root "$root" remove openssh --dry-run
+```
+
+`inspect` validates the archive and prints its manifest as JSON without opening a target. Install and removal previews use the same preflight checks as their write operations. They show which files would be added, replaced, removed or preserved. Preview opens the package database read-only and stops if an interrupted transaction needs recovery. In that case, run `verify` to recover and check the target before previewing again. Install rechecks the plan when applying it. Reinstalling an identical file keeps its existing inode.
+
 ## Install on a disposable offline root
 
 The following example is for the x86-64/glibc 2.41 validation build. A Genesis build must run against its own glibc 2.44 toolchain and be initialized with the corresponding tuple.

@@ -50,6 +50,60 @@ class PackageTests(unittest.TestCase):
                                      arch="x86_64", abi=abi, cpu="x86-64-v1"), stage)
             return output
 
+    def test_inspect_requires_no_target(self):
+        archive = self.package()
+        result = subprocess.check_output([str(SCRIPT), "inspect", str(archive)], text=True)
+        manifest = json.loads(result)
+        self.assertEqual(manifest["name"], "demo")
+        self.assertEqual(manifest["files"]["usr/bin/demo"]["mode"], 0o755)
+
+    def test_dry_run_previews_upgrade_and_removal_without_writes(self):
+        original = self.package({"usr/bin/demo": b"program", "usr/bin/obsolete": b"old",
+                                 "etc/demo.conf": b"default"})
+        self.assertIn("add: /usr/bin/demo", self.cli("install", original, "--dry-run"))
+        self.assertFalse((self.root / "usr").exists())
+        self.assertEqual(self.cli("list"), "")
+        self.cli("install", original)
+        binary = self.root / "usr/bin/demo"
+        config = self.root / "etc/demo.conf"
+        config.write_bytes(b"local")
+        db_before = self.db_path.read_bytes()
+        update = self.package({"usr/bin/demo": b"new", "etc/demo.conf": b"new default"},
+                              version="2")
+        plan = self.cli("install", update, "--dry-run")
+        self.assertIn("replace: /usr/bin/demo", plan)
+        self.assertIn("remove: /usr/bin/obsolete", plan)
+        self.assertIn("preserve: /etc/demo.conf", plan)
+        self.assertIn("remove: /usr/bin/demo", self.cli("remove", "demo", "--dry-run"))
+        self.assertEqual(self.db_path.read_bytes(), db_before)
+        self.assertEqual(binary.read_bytes(), b"program")
+        self.assertEqual(config.read_bytes(), b"local")
+        self.cli("install", update)
+        self.assertEqual(binary.read_bytes(), b"new")
+        self.assertFalse((binary.parent / "obsolete").exists())
+        self.assertEqual(config.read_bytes(), b"local")
+
+    def test_dry_run_refuses_pending_recovery(self):
+        archive = self.package()
+        self.cli("install", archive)
+        binary = self.root / "usr/bin/demo"
+        with sqlite3.connect(self.db_path) as db:
+            db.execute("INSERT INTO undo VALUES (?, ?, ?)", ("usr/bin/demo", b"program", 0o755))
+        binary.write_bytes(b"partial")
+        self.assertIn("pending recovery", self.cli("install", archive, "--dry-run", ok=False))
+        self.assertEqual(binary.read_bytes(), b"partial")
+        self.cli("verify")
+        self.assertEqual(binary.read_bytes(), b"program")
+
+    def test_reinstallation_keeps_identical_payload_file(self):
+        archive = self.package()
+        self.cli("install", archive)
+        binary = self.root / "usr/bin/demo"
+        inode = binary.stat().st_ino
+        self.assertNotIn("replace:", self.cli("install", archive, "--dry-run"))
+        self.cli("install", archive)
+        self.assertEqual(binary.stat().st_ino, inode)
+
     def test_lifecycle_preserves_modified_config(self):
         config = self.root / "etc/demo.conf"
         binary = self.root / "usr/bin/demo"

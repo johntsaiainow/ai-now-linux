@@ -262,7 +262,7 @@ def restore(root, db):
 
 
 @contextmanager
-def database(root, initialize=False):
+def database(root, initialize=False, preview=False):
     if not root.is_dir() or root.absolute() != root.resolve() or root.resolve() == Path("/"):
         raise PackageError("use an existing, explicit, non-symlink target directory other than /")
     root = root.resolve()
@@ -270,19 +270,24 @@ def database(root, initialize=False):
     if not initialize and not state.is_file():
         raise PackageError("target is not initialized")
     lock = destination(root, "var/lib/ainpkg/lock")
-    fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    flags = os.O_RDONLY if preview else os.O_RDWR | os.O_CREAT
+    fd = os.open(lock, flags | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, "rb") as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX)
+        fcntl.flock(handle, fcntl.LOCK_SH if preview else fcntl.LOCK_EX)
         for name in ("state.sqlite", "state.sqlite-journal", "state.sqlite-wal", "state.sqlite-shm"):
             snapshot_path = destination(root, f"var/lib/ainpkg/{name}")
             if snapshot_path.exists() and (not snapshot_path.is_file()
                                           or snapshot_path.stat().st_nlink != 1):
                 raise PackageError(f"unsafe database file: {snapshot_path}")
-        db = sqlite3.connect(state)
+        db = sqlite3.connect(state.as_uri() + "?mode=ro", uri=True) if preview else sqlite3.connect(state)
         try:
-            db.execute("PRAGMA foreign_keys = ON")
-            db.executescript(SCHEMA)
-            restore(root, db)
+            if preview:
+                if db.execute("SELECT 1 FROM undo LIMIT 1").fetchone():
+                    raise PackageError("target has a pending recovery; run verify before previewing")
+            else:
+                db.execute("PRAGMA foreign_keys = ON")
+                db.executescript(SCHEMA)
+                restore(root, db)
             yield root, db
         finally:
             db.close()
@@ -314,7 +319,21 @@ def matches(content, checksum, mode):
     return data is not None and digest(data) == checksum and actual_mode == mode
 
 
-def install(root, db, archive):
+def show_plan(summary, changes, preserved):
+    print(summary)
+    for path, (before, after) in sorted(changes.items()):
+        if after is None:
+            action = "remove"
+        elif before[0] is None:
+            action = "add"
+        else:
+            action = "replace"
+        print(f"{action}: /{path}")
+    for path in sorted(preserved):
+        print(f"preserve: /{path}")
+
+
+def install(root, db, archive, preview=False):
     manifest, entries = read_package(archive)
     if tuple(manifest[field] for field in TARGET_FIELDS) != db.execute(
             "SELECT arch, abi, cpu FROM target").fetchone():
@@ -340,11 +359,16 @@ def install(root, db, archive):
         elif path in entries:
             data, mode = entries[path]
             baseline = (digest(data), mode)
-            changes[path] = (before, (data, mode))
+            if before != (data, mode):
+                changes[path] = (before, (data, mode))
         elif before[0] is not None:
             changes[path] = (before, None)
         if path in entries:
             records.append((path, name, *baseline))
+
+    if preview:
+        show_plan(f"would install {name} {manifest['version']}", changes, preserved)
+        return
 
     def update():
         db.execute("INSERT INTO packages VALUES (?, ?, ?) ON CONFLICT(name) DO UPDATE "
@@ -359,7 +383,7 @@ def install(root, db, archive):
     print(f"installed {name} {manifest['version']}")
 
 
-def remove(root, db, name):
+def remove(root, db, name, preview=False):
     if not db.execute("SELECT 1 FROM packages WHERE name = ?", (name,)).fetchone():
         raise PackageError(f"package is not installed: {name}")
     changes, preserved = {}, []
@@ -370,6 +394,10 @@ def remove(root, db, name):
             changes[path] = (before, None)
         elif before[0] is not None:
             preserved.append(path)
+
+    if preview:
+        show_plan(f"would remove {name}", changes, preserved)
+        return
 
     def update():
         db.execute("DELETE FROM files WHERE package = ?", (name,))
@@ -445,8 +473,13 @@ def main():
     source.add_argument("--source", type=Path, help="cached upstream archive, still hash checked")
     source.add_argument("--output", required=True, type=Path)
     source.add_argument("--jobs", default=1, type=int, choices=range(1, 129), metavar="1..128")
-    commands.add_parser("install").add_argument("archive", type=Path)
-    commands.add_parser("remove").add_argument("name", type=identifier)
+    installer = commands.add_parser("install")
+    installer.add_argument("archive", type=Path)
+    remover = commands.add_parser("remove")
+    remover.add_argument("name", type=identifier)
+    for command in (installer, remover):
+        command.add_argument("--dry-run", action="store_true", help="preview changes without writing")
+    commands.add_parser("inspect").add_argument("archive", type=Path)
     commands.add_parser("verify").add_argument("name", nargs="?", type=identifier)
     commands.add_parser("owner").add_argument("path")
     commands.add_parser("list")
@@ -462,9 +495,14 @@ def main():
         return build(args)
     if args.command in {"upload", "download"}:
         return release(args)
+    if args.command == "inspect":
+        manifest, _ = read_package(args.archive)
+        print(json.dumps(manifest, indent=2, sort_keys=True))
+        return 0
     if args.root is None:
         parser.error("--root is required for target operations")
-    with database(args.root, args.command == "init") as (root, db):
+    preview = getattr(args, "dry_run", False)
+    with database(args.root, args.command == "init", preview=preview) as (root, db):
         if args.command == "init":
             target = (args.arch, args.abi, args.cpu)
             previous = db.execute("SELECT arch, abi, cpu FROM target").fetchone()
@@ -474,9 +512,9 @@ def main():
                 with db:
                     db.execute("INSERT INTO target VALUES (?, ?, ?)", target)
         elif args.command == "install":
-            return install(root, db, args.archive)
+            return install(root, db, args.archive, preview=preview)
         elif args.command == "remove":
-            return remove(root, db, args.name)
+            return remove(root, db, args.name, preview=preview)
         elif args.command == "verify":
             return verify(root, db, args.name)
         elif args.command == "owner":
