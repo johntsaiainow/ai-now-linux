@@ -1,0 +1,183 @@
+#!/usr/bin/env python3
+"""Deploy a verified AI-Now Linux BIOS disk image from rescue media."""
+
+import argparse
+from contextlib import contextmanager
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import struct
+import subprocess
+import sys
+import tempfile
+
+
+SECTOR = 512
+MIB = 1024 * 1024
+CHUNK = 4 * MIB
+# Linux block-device ioctls on x86.
+BLKSSZGET = 0x1268
+BLKGETSIZE64 = 0x80001272 | (struct.calcsize("P") << 16)
+BLKROGET = 0x125E
+
+
+class InstallError(Exception):
+    pass
+
+
+def checksum(stream, size):
+    stream.seek(0)
+    digest = hashlib.sha256()
+    remaining = size
+    while remaining:
+        data = stream.read(min(remaining, CHUNK))
+        if not data:
+            raise InstallError("unexpected end of image or destination")
+        digest.update(data)
+        remaining -= len(data)
+    return digest.hexdigest()
+
+
+def check_image(source, expected):
+    info = os.fstat(source.fileno())
+    if not stat.S_ISREG(info.st_mode) or info.st_size % SECTOR:
+        raise InstallError("installation payload must be a sector-aligned regular image file")
+    mbr = source.read(SECTOR)
+    primary_header = source.read(SECTOR)
+    if (len(mbr) != SECTOR or mbr[510:] != b"\x55\xaa"
+            or not any(mbr[:440]) or primary_header[:8] == b"EFI PART"):
+        raise InstallError("expected a BIOS/MBR deployment image with bootstrap code")
+    partitions = [mbr[start:start + 16] for start in range(446, 510, 16)]
+    active, *unused = partitions
+    start, count = struct.unpack_from("<II", active, 8)
+    if (active[0] != 0x80 or active[4] != 0x83 or any(map(any, unused))
+            or start < MIB // SECTOR or not count or (start + count) * SECTOR > info.st_size):
+        raise InstallError("expected one active, aligned Linux MBR partition")
+    if start % (MIB // SECTOR):
+        raise InstallError("Linux partition must start on a 1 MiB boundary")
+    if checksum(source, info.st_size) != expected:
+        raise InstallError("installation image SHA256 mismatch")
+    return info.st_size
+
+
+def copy_and_verify(source, destination, size, expected):
+    source.seek(0)
+    remaining = size
+    while remaining:
+        data = source.read(min(remaining, CHUNK))
+        if not data:
+            raise InstallError("installation source was truncated")
+        destination.write(data)
+        remaining -= len(data)
+    destination.flush()
+    os.fsync(destination.fileno())
+    if checksum(destination, size) != expected:
+        raise InstallError("destination SHA256 verification failed")
+
+
+def file_target(source, path, size, expected, apply):
+    if os.path.lexists(path):
+        raise InstallError("rehearsal destination already exists")
+    if not path.parent.is_dir():
+        raise InstallError("rehearsal destination directory does not exist")
+    print(f"Destination file: {path}")
+    if not apply:
+        return
+    with tempfile.TemporaryDirectory(dir=path.parent) as staging:
+        temporary = Path(staging) / "disk.img"
+        with temporary.open("w+b") as output:
+            copy_and_verify(source, output, size, expected)
+        os.link(temporary, path)
+
+
+def ioctl_number(device, request, layout):
+    value = bytearray(struct.calcsize(layout))
+    fcntl.ioctl(device, request, value, True)
+    return struct.unpack(layout, value)[0]
+
+
+@contextmanager
+def exclusive_disk(path, apply):
+    if path.parent != Path("/dev/disk/by-id") or not path.is_symlink():
+        raise InstallError("use a whole-disk /dev/disk/by-id/ identifier")
+    canonical = path.resolve(strict=True)
+    device = canonical.stat()
+    if canonical.parent != Path("/dev") or not stat.S_ISBLK(device.st_mode):
+        raise InstallError("disk identifier does not resolve to a block device")
+    details = subprocess.check_output(
+        ["lsblk", "--json", "--nodeps", "--output", "TYPE,MODEL,SERIAL", "--", str(canonical)],
+        text=True,
+    )
+    [disk] = json.loads(details)["blockdevices"]
+    if disk["type"] != "disk":
+        raise InstallError("destination is not a whole disk")
+    access = os.O_RDWR if apply else os.O_RDONLY
+    fd = os.open(canonical, access | os.O_EXCL | os.O_NOFOLLOW)
+    with os.fdopen(fd, "r+b" if apply else "rb") as handle:
+        opened = os.fstat(handle.fileno())
+        if opened.st_rdev != device.st_rdev or path.resolve(strict=True) != canonical:
+            raise InstallError("destination identity changed")
+        if ioctl_number(handle, BLKROGET, "=i"):
+            raise InstallError("destination is read-only")
+        if ioctl_number(handle, BLKSSZGET, "=i") != SECTOR:
+            raise InstallError("this installer requires a 512-byte logical sector size")
+        capacity = ioctl_number(handle, BLKGETSIZE64, "=Q")
+        yield handle, disk, capacity
+
+
+def disk_target(source, path, size, expected, apply):
+    with exclusive_disk(path, apply) as (device, disk, capacity):
+        if capacity < size or capacity > 2**32 * SECTOR:
+            raise InstallError("destination is too small or beyond the MBR address limit")
+        print(f"Destination disk: {path}")
+        print(f"Model: {disk['model']}  Serial: {disk['serial']}  Capacity: {capacity} bytes")
+        if not apply:
+            return
+        if not sys.stdin.isatty():
+            raise InstallError("disk installation requires an interactive terminal")
+        token = f"ERASE {path.name}"
+        if input(f"All partitions on this disk will be replaced. Type {token}: ") != token:
+            raise InstallError("confirmation did not match")
+        # Remove a former backup GPT from the end of a larger destination.
+        tail = min(capacity - size, MIB)
+        if tail:
+            device.seek(capacity - tail)
+            device.write(bytes(tail))
+            device.seek(0)
+        copy_and_verify(source, device, size, expected)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--image", type=Path, required=True, help="prepared BIOS/MBR payload")
+    parser.add_argument("--sha256", required=True, help="expected digest from a trusted source")
+    destination = parser.add_mutually_exclusive_group(required=True)
+    destination.add_argument("--output", type=Path, help="new regular file for rehearsal")
+    destination.add_argument("--disk", type=Path, help="whole disk under /dev/disk/by-id")
+    parser.add_argument("--apply", action="store_true", help="perform the displayed installation")
+    args = parser.parse_args()
+    if not re.fullmatch(r"[a-f0-9]{64}", args.sha256):
+        raise InstallError("SHA256 must be 64 lowercase hexadecimal digits")
+    fd = os.open(args.image, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as source:
+        size = check_image(source, args.sha256)
+        print(f"Verified image: {args.image} ({size} bytes)")
+        print(f"SHA256: {args.sha256}")
+        if args.disk is not None:
+            disk_target(source, args.disk, size, args.sha256, args.apply)
+        else:
+            file_target(source, args.output, size, args.sha256, args.apply)
+    print("Installation verified." if args.apply else "Preview complete. No data written.")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (InstallError, OSError, ValueError, subprocess.CalledProcessError, EOFError) as error:
+        sys.exit(f"ainstall: {error}")
+    except KeyboardInterrupt:
+        sys.exit("ainstall: interrupted")

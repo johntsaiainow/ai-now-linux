@@ -60,6 +60,10 @@ Hardware targets and software profiles are separate. Compatible binaries may be 
 
 [Chapter 11 · ainpkg](docs/packages/ainpkg.md) documents the CLI, format, target-root workflow and test commands. Source builds and compatible binaries share one SQLite package database. The terminal menu remains planned.
 
+## Chapter 12
+
+[Installer and x86 hardware profiles](docs/deployment/chapter-12.md) covers file-based installation rehearsal and the EeePC, genericx86 and genericamd64 kernel targets. Rescue media and physical acceptance are pending.
+
 ## Engineering records
 
 - [Day 01 — Foundation](docs/journal/2026-11-24.md)
