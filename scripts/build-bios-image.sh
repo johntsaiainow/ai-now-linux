@@ -22,6 +22,8 @@ project=$(cd "$(dirname -- "$0")/.." && pwd)
     fail 'output must be a new file'
 [[ "$parent/" != "$rootfs/"* ]] || fail 'output directory must be outside the staged rootfs'
 [[ $EUID == 0 ]] || fail 'run as root in a private mount namespace to manage loop devices'
+[[ -r /usr/lib/grub/i386-pc/modinfo.sh ]] ||
+    fail 'missing i386-pc GRUB modules. On Ubuntu or Debian install grub-pc-bin.'
 for tool in blkid cp findmnt grub-install losetup mkfs.ext4 mount mountpoint             python3 sfdisk sha256sum truncate umount; do
     command -v "$tool" >/dev/null || fail "missing tool: $tool"
 done

@@ -26,7 +26,7 @@ All three Linux 7.1.8 candidates compiled through `bzImage modules` and executed
 
 ## Build EeePC images from Genesis
 
-Run on Baihu after shutting down any VM using the Genesis RAW. Download the verified EeePC candidate kernel bundle. Use a new output directory:
+Run on Baihu after shutting down any VM using the Genesis RAW. On Ubuntu, install `grub-pc-bin` for the BIOS modules. The builders check for them before copying the rootfs. Download the verified EeePC candidate kernel bundle. Use a new output directory:
 
 ```bash
 sudo unshare --mount --propagation private scripts/build-eeepc-rescue.sh \

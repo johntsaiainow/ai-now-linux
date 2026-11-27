@@ -17,6 +17,8 @@ mib=1048576
 [[ ! -e "$output" && ! -L "$output" ]] || fail 'output directory already exists'
 printf '%s  %s\n' "$kernel_sha" "$bundle" | sha256sum -c -
 [[ $EUID == 0 ]] || fail 'run as root inside a private mount namespace'
+[[ -r /usr/lib/grub/i386-pc/modinfo.sh ]] ||
+    fail 'missing i386-pc GRUB modules. On Ubuntu or Debian install grub-pc-bin.'
 for tool in blkid blockdev cp df du grub-install losetup mkfs.ext4 mount mountpoint sfdisk tar umount zstd; do
     command -v "$tool" >/dev/null || fail "missing tool: $tool"
 done
