@@ -46,7 +46,29 @@ Source output and downloaded assets use the same `install` command and the SQLit
 
 Files under `/etc` are treated as configuration. Existing unmanaged or locally modified configurations are preserved on install or upgrade, and their path is printed. An unmodified packaged configuration receives the new default. For a preserved config, review the new default inside the package and merge explicitly. Verify reports local config changes as informational and exits nonzero for missing files or modified non-config files. Removal keeps locally modified files and releases their database ownership.
 
-OpenSSH uses the upstream `install-nokeys` target. The recipe installs the client, daemon, helpers, configuration, manual pages and license. It disables PAM integration and stages `ssh-keysign` without setuid. Runtime deployment requires compatible OpenSSL 3 and zlib, an `sshd` privilege-separation account and an administrator-prepared, root-owned `/var/empty/sshd`. Provision host keys independently in each target, validate with `sshd -t`, then enable a service after target-side testing. The package does not include keys or a service unit.
+## OpenSSH client and server
+
+Both packages use the same pinned upstream source and stage via `install-nokeys`.
+
+```bash
+scripts/ainpkg build openssh --ref "$ref" --output ./openssh.ainpkg
+scripts/ainpkg build openssh --ref "$ref" --package openssh-server \
+    --output ./openssh-server.ainpkg
+```
+
+`openssh` owns the client tools and configuration. `openssh-server` owns the daemon, server helpers and configuration, the systemd service, and the sysusers and tmpfiles fragments. The server includes a private key generation helper, so the client package is optional. Neither package distributes a host key. PAM is disabled and the client's `ssh-keysign` is staged without setuid. Build on the target ABI with OpenSSL and zlib available. Runtime requires the matching OpenSSL and zlib libraries from the target build environment.
+
+When upgrading from a managed combined `openssh` package, preview and install the new client package first so it releases the old daemon paths, then install `openssh-server`. The installer preserves edited server configuration during that transition.
+
+For a prepared systemd target, boot applies the packaged sysusers and tmpfiles rules, which provision the `sshd` account and the root-owned `/var/empty/sshd` directory. On an already booted test target where the files are available in their installed locations, run the rules explicitly before manually starting the service:
+
+```bash
+systemd-sysusers openssh-server.conf
+systemd-tmpfiles --create openssh-server.conf
+systemctl daemon-reload
+```
+
+The service is opt-in. Review the target's authentication settings and intended listeners before starting it. On first start, the unit generates missing host keys and validates the configuration before running the daemon. Removing the package leaves generated host keys and the system account in place. Stop the service before package removal.
 
 ## Transfer an existing release asset
 

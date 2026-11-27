@@ -253,7 +253,7 @@ class PackageTests(unittest.TestCase):
         source = self.work / "source.tar"
         source.write_bytes(b"pinned source")
         (recipe / "recipe.toml").write_text(
-            f'name = "demo"\nversion = "1"\n[cpu]\n'
+            f'name = "demo"\nversion = "1"\noutputs = ["demo-server"]\n[cpu]\n'
             f'"{os.uname().machine}" = "baseline"\n[source]\n'
             f'sha256 = "{ainpkg.file_digest(source)}"\n'
         )
@@ -289,6 +289,15 @@ class PackageTests(unittest.TestCase):
         self.assertFalse(bootstrap.exists())
         self.cli(*options, "--recipe-sha256", ainpkg.file_digest(recipe_archive), env=env)
         self.assertEqual(bootstrap.read_bytes(), output.read_bytes())
+        server = self.work / "server.ainpkg"
+        self.cli("build", "demo", "--repo", repo, "--source", source,
+                 "--output", server, "--package", "demo-server")
+        self.assertEqual(ainpkg.read_package(server)[0]["name"], "demo-server")
+        invalid = self.work / "invalid.ainpkg"
+        self.assertIn("does not produce", self.cli(
+            "build", "demo", "--repo", repo, "--source", source,
+            "--output", invalid, "--package", "unknown", ok=False))
+        self.assertFalse(invalid.exists())
         source.write_bytes(b"tampered source")
         rejected = self.work / "rejected.ainpkg"
         self.assertIn("source archive SHA256 mismatch",

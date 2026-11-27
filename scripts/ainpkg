@@ -234,7 +234,10 @@ def build(args):
         arch = identifier(platform.machine())
         abi = identifier(os.confstr("CS_GNU_LIBC_VERSION").replace(" ", "-"))
         cpu = identifier(spec["cpu"][arch])
-        metadata = dict(format=1, name=recipe, version=identifier(spec["version"]),
+        package = args.package or recipe
+        if package != recipe and package not in spec.get("outputs", []):
+            raise PackageError(f"recipe {recipe} does not produce {package}")
+        metadata = dict(format=1, name=package, version=identifier(spec["version"]),
                         arch=arch, abi=abi, cpu=cpu, recipe_commit=revision)
         pin = spec["source"]["sha256"]
         if not SHA256.fullmatch(pin):
@@ -259,7 +262,7 @@ def build(args):
             "PATH": "/usr/bin:/bin", "HOME": str(work), "LC_ALL": "C", "TZ": "UTC",
             "DESTDIR": str(stage), "SOURCE_ARCHIVE": str(source),
             "SOURCE_DATE_EPOCH": str(int(spec.get("source_date_epoch", 0))),
-            "JOBS": str(args.jobs), "AINPKG_ARCH": arch,
+            "JOBS": str(args.jobs), "AINPKG_ARCH": arch, "AINPKG_PACKAGE": package,
         }
         subprocess.run(["bash", str(recipe_dir / "build.sh")], cwd=work,
                        env=env, check=True)
@@ -504,6 +507,7 @@ def main():
     source.add_argument("--recipe-archive", type=Path, help="trusted git archive for bootstrapping")
     source.add_argument("--recipe-sha256", help="trusted SHA256 of the recipe archive")
     source.add_argument("--source", type=Path, help="cached upstream archive, still hash checked")
+    source.add_argument("--package", type=identifier, help="select a named output from the recipe")
     source.add_argument("--output", required=True, type=Path)
     source.add_argument("--jobs", default=1, type=int, choices=range(1, 129), metavar="1..128")
     installer = commands.add_parser("install")

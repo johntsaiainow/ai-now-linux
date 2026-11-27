@@ -1,0 +1,14 @@
+[Unit]
+Description=OpenSSH server
+After=network.target systemd-sysusers.service systemd-tmpfiles-setup.service
+
+[Service]
+Type=exec
+ExecStartPre=/usr/libexec/openssh/ssh-keygen -A
+ExecStartPre=/usr/sbin/sshd -t
+ExecStart=/usr/sbin/sshd -D
+ExecReload=/usr/sbin/sshd -t
+ExecReload=/bin/kill -HUP $MAINPID
+
+[Install]
+WantedBy=multi-user.target

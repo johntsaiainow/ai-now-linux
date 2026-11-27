@@ -1,5 +1,6 @@
 name = "openssh"
 version = "10.6p2"
+outputs = ["openssh-server"]
 source_date_epoch = 1793836800
 
 [cpu]
