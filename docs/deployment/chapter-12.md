@@ -24,6 +24,19 @@ Omit `--config-only` and use a new output directory to build `bzImage` and modul
 
 All three Linux 7.1.8 candidates compiled through `bzImage modules` and executed a minimal native init in QEMU TCG (`qemu32` for the i686-class profile and `qemu64` for the 64-bit profiles). These checks validate kernel boot and architecture. EeePC Ethernet, Wi-Fi and audio depend on physical PCI and codec identification and separate device tests.
 
+## Build EeePC images from Genesis
+
+Run on Baihu after shutting down any VM using the Genesis RAW. Download the verified EeePC candidate kernel bundle. Use a new output directory:
+
+```bash
+sudo unshare --mount --propagation private scripts/build-eeepc-rescue.sh \
+  /home/john/Projects/ai-now-linux/images/ai-now-linux.raw \
+  "$HOME/Downloads/ainow-7.1.8-ainow-eeepc-1005p-kernel.tar.zst" \
+  "$HOME/eeepc-media"
+```
+
+The wrapper pins the kernel bundle digest, opens Genesis partition 2 through a read-only loop, and mounts ext4 with journal replay disabled. It measures the rootfs, checks workspace capacity, stages the candidate kernel modules and writes a fresh deployment image and a separate rescue image containing that payload. The output directory contains `eeepc-deploy.img`, `eeepc-rescue.img` and `SHA256SUMS`. The source filesystem contents are copied into the new images, so keep them local unless the rootfs has been prepared for distribution. The EeePC physical boot and device support still require hardware acceptance.
+
 ## Install from rescue media
 
 `scripts/ainstall` is a Python terminal installer that writes a prepared, offline BIOS/MBR disk image. The initial payload layout is one active Linux partition starting at an aligned offset. A separate rescue USB will carry the installer, the target image and release checksums. This layout keeps the first installer independent of GPT relocation and filesystem resizing. The existing Genesis GPT RAW is not a compatible payload.
