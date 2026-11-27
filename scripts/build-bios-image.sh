@@ -92,11 +92,19 @@ printf 'UUID=%s / ext4 defaults 0 1\n' "$uuid" > "$mount_dir/etc/fstab"
 grub-install --target=i386-pc --boot-directory="$mount_dir/boot" --recheck "$loop"
 initrd=
 if [[ -f "$mount_dir/boot/initrd.img" ]]; then initrd='initrd /boot/initrd.img'; fi
+default_entry=serial
+if [[ ${AINOW_BOOT_PROFILE:-} == eeepc ]]; then default_entry=local; fi
 cat > "$mount_dir/boot/grub/grub.cfg" <<GRUB
+set default=$default_entry
 set timeout=5
-menuentry 'AI-Now Linux' {
+menuentry 'AI-Now Linux (serial console)' --id serial {
     search --no-floppy --fs-uuid --set=root $uuid
     linux /boot/vmlinuz root=PARTUUID=$partuuid rw rootwait console=tty0 console=ttyS0,115200n8
+    $initrd
+}
+menuentry 'AI-Now Linux (local console, basic display)' --id local {
+    search --no-floppy --fs-uuid --set=root $uuid
+    linux /boot/vmlinuz root=PARTUUID=$partuuid rw rootwait console=tty0 nomodeset loglevel=7
     $initrd
 }
 GRUB
