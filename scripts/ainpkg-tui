@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Terminal packaging menu. All builds use the same ainpkg command as scripts.
+set -u
+
+script_dir=$(cd -- "$(dirname -- "$0")" && pwd)
+repo=$(git -C "$script_dir" rev-parse --show-toplevel) || exit 1
+
+new_recipe() {
+    read -er -p 'Package name: ' name || return
+    read -er -p 'Version: ' version || return
+    read -er -p 'HTTPS source URL: ' url || return
+    read -er -p 'Source SHA256: ' checksum || return
+    read -er -p 'Template [script/autotools, default script]: ' template || return
+    "$script_dir/ainpkg-new" "$name" "$version" "$url" "$checksum" \
+        --repo "$repo" --template "${template:-script}" &&
+        printf '%s\n' 'Review and commit the recipe before building it.'
+}
+
+build_recipe() {
+    read -er -p 'Committed recipe name: ' name || return
+    read -er -p 'Git ref [HEAD]: ' ref || return
+    read -er -p 'Output .ainpkg file: ' output || return
+    read -er -p 'Cached source archive [optional]: ' source || return
+    read -er -p 'Build dependency .ainpkg [optional, repeat until blank]: ' dependency || return
+    local args=(build "$name" --repo "$repo" --ref "${ref:-HEAD}" --output "$output")
+    [[ -z "$source" ]] || args+=(--source "$source")
+    while [[ -n "$dependency" ]]; do
+        args+=(--build-dependency "$dependency")
+        read -er -p 'Another dependency [blank to continue]: ' dependency || return
+    done
+    "$script_dir/ainpkg" "${args[@]}"
+}
+
+printf '%s\n' 'AI-Now Linux package workbench'
+PS3='Choice: '
+select action in 'Create recipe' 'Build package' 'Inspect package' 'Exit'; do
+    case "$REPLY" in
+        1) new_recipe ;;
+        2) build_recipe ;;
+        3)
+            read -er -p 'Package .ainpkg file: ' archive || exit 0
+            "$script_dir/ainpkg" inspect "$archive"
+            ;;
+        4) exit 0 ;;
+        *) printf '%s\n' 'Select 1, 2, 3 or 4.' ;;
+    esac
+done

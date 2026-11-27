@@ -305,6 +305,51 @@ class PackageTests(unittest.TestCase):
                                "--output", rejected, ok=False))
         self.assertFalse(rejected.exists())
 
+    @unittest.skipIf(os.geteuid() == 0, "source builds reject root")
+    def test_build_stages_only_compatible_dependencies(self):
+        repo = self.work / "recipe-repo"
+        recipe = repo / "packages/demo"
+        recipe.mkdir(parents=True)
+        source = self.work / "source.tar"
+        source.write_bytes(b"source fixture")
+        arch = os.uname().machine
+        abi = os.confstr("CS_GNU_LIBC_VERSION").replace(" ", "-")
+        (recipe / "recipe.toml").write_text(
+            f'name = "demo"\nversion = "1"\nbuild_requires = ["build-tool"]\n'
+            f'[cpu]\n"{arch}" = "baseline"\n[source]\n'
+            f'sha256 = "{ainpkg.file_digest(source)}"\n'
+        )
+        (recipe / "build.sh").write_text(
+            'set -eu\nmkdir -p "$DESTDIR/usr/bin"\n'
+            'ainpkg-test-tool > "$DESTDIR/usr/bin/demo"\n'
+        )
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(repo), "-c", "user.name=Test",
+                        "-c", "user.email=test@example.invalid", "commit", "-qm", "Recipe"],
+                       check=True)
+        stage = self.work / "dependency"
+        tool = stage / "usr/bin/ainpkg-test-tool"
+        tool.parent.mkdir(parents=True)
+        tool.write_text("#!/bin/sh\nprintf '%s' staged-tool\n")
+        tool.chmod(0o755)
+        dependency = self.work / "build-tool.ainpkg"
+        metadata = dict(format=1, name="build-tool", version="1", arch=arch,
+                        abi=abi, cpu="baseline")
+        ainpkg.pack(dependency, metadata, stage)
+        incompatible = self.work / "incompatible.ainpkg"
+        ainpkg.pack(incompatible, dict(metadata, abi="wrong-abi"), stage)
+        output = self.work / "demo-build.ainpkg"
+        args = ("build", "demo", "--repo", repo, "--source", source, "--output", output)
+        self.assertIn("missing build dependencies", self.cli(*args, ok=False))
+        self.assertIn("incompatible build dependency", self.cli(
+            *args, "--build-dependency", incompatible, ok=False))
+        self.assertFalse(output.exists())
+        self.cli(*args, "--build-dependency", dependency)
+        _, entries = ainpkg.read_package(output)
+        self.assertEqual(set(entries), {"usr/bin/demo"})
+        self.assertEqual(entries["usr/bin/demo"][0], b"staged-tool")
+
     def test_same_payload_produces_identical_archive(self):
         first = self.package(filename="first.ainpkg")
         second = self.package(filename="second.ainpkg")

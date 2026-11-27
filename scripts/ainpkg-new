@@ -1,0 +1,92 @@
+#!/usr/bin/env python3
+"""Create a custom AI-Now package recipe in a Git checkout."""
+
+import argparse
+import json
+from pathlib import Path
+import re
+import subprocess
+import sys
+from urllib.parse import urlsplit
+
+
+SCRIPT_RECIPE = """#!/usr/bin/env bash
+set -euo pipefail
+# Archive layout: bin/<package-name>, a regular executable or script.
+mkdir -p "$DESTDIR/usr/bin"
+python3 - "$SOURCE_ARCHIVE" "$AINPKG_PACKAGE" "$DESTDIR/usr/bin" <<'SOURCE'
+import shutil
+import sys
+import tarfile
+from pathlib import Path
+
+source, name, directory = sys.argv[1:]
+with tarfile.open(source, "r:*") as archive:
+    members = [item for item in archive if item.name.removeprefix("./") == f"bin/{name}"]
+    if len(members) != 1 or not members[0].isfile():
+        raise SystemExit(f"archive must contain exactly one regular bin/{name}")
+    target = Path(directory) / name
+    with archive.extractfile(members[0]) as stream, target.open("xb") as output:
+        shutil.copyfileobj(stream, output)
+    target.chmod(0o755)
+SOURCE
+"""
+
+AUTOTOOLS_RECIPE = """#!/usr/bin/env bash
+set -euo pipefail
+# Use a reviewed source archive with one top-level directory.
+umask 022
+mkdir source
+tar -xf "$SOURCE_ARCHIVE" -C source --strip-components=1
+cd source
+./configure --prefix=/usr --libdir=/usr/lib --sysconfdir=/etc
+make -j"$JOBS"
+make DESTDIR="$DESTDIR" install
+"""
+
+
+def identifier(value):
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", value):
+        raise argparse.ArgumentTypeError("use letters, digits, dots, underscores, plus or hyphens")
+    return value
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("name", type=identifier)
+    parser.add_argument("version", type=identifier)
+    parser.add_argument("url", help="HTTPS URL of the source archive")
+    parser.add_argument("sha256", help="expected digest of that archive")
+    parser.add_argument("--repo", type=Path, default=Path.cwd())
+    parser.add_argument("--template", choices=("script", "autotools"), default="script")
+    parser.add_argument("--arch", type=identifier, default="x86_64")
+    parser.add_argument("--cpu", type=identifier, default="x86-64-v1")
+    args = parser.parse_args()
+    url = urlsplit(args.url)
+    if (url.scheme != "https" or not url.hostname or url.username is not None
+            or any(character.isspace() for character in args.url)):
+        parser.error("provide an HTTPS source URL without embedded credentials")
+    if not re.fullmatch(r"[a-f0-9]{64}", args.sha256):
+        parser.error("SHA256 must be 64 lowercase hexadecimal digits")
+
+    root = subprocess.check_output(
+        ["git", "-C", str(args.repo), "rev-parse", "--show-toplevel"], text=True).strip()
+    directory = Path(root) / "packages" / args.name
+    directory.parent.mkdir(exist_ok=True)
+    directory.mkdir()
+    metadata = (
+        f'name = {json.dumps(args.name)}\nversion = {json.dumps(args.version)}\n'
+        f'\n[cpu]\n{json.dumps(args.arch)} = {json.dumps(args.cpu)}\n'
+        f'\n[source]\nurl = {json.dumps(args.url)}\nsha256 = "{args.sha256}"\n'
+    )
+    (directory / "recipe.toml").write_text(metadata, encoding="utf-8")
+    template = SCRIPT_RECIPE if args.template == "script" else AUTOTOOLS_RECIPE
+    (directory / "build.sh").write_text(template, encoding="utf-8")
+    print(f"Created {directory / 'recipe.toml'} and build.sh")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+        sys.exit(f"ainpkg-new: {error}")

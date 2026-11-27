@@ -2,6 +2,8 @@
 
 `scripts/ainpkg` runs with Python 3.12 or newer and the `zstd` CLI. Source builds also require Bash and the recipe toolchain. Use Git or a verified Git recipe export. GitHub release transfers require `gh` and appropriate GitHub access.
 
+新手和自訂套件作者可從 [中文自訂套件 Tutorial](tutorial-zh-TW.md) 開始。
+
 ## Build from a Git recipe
 
 Clone or fetch the recipe repository and choose a reviewed commit. If using a branch or tag, resolve it to a commit before recording or distributing a build.

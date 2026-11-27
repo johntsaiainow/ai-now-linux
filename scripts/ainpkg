@@ -256,11 +256,31 @@ def build(args):
                     shutil.copyfileobj(response, stream)
         if file_digest(source) != pin:
             raise PackageError("source archive SHA256 mismatch")
+        dependency_root = work / "dependencies"
+        dependency_root.mkdir()
+        dependency_names = set()
+        for archive in args.build_dependency:
+            dep, files = read_package(archive)
+            if (dep["arch"], dep["abi"], dep["cpu"]) != (arch, abi, cpu):
+                raise PackageError(f"incompatible build dependency: {dep['name']}")
+            if dep["name"] in dependency_names:
+                raise PackageError(f"duplicate build dependency: {dep['name']}")
+            dependency_names.add(dep["name"])
+            for path, (data, mode) in files.items():
+                dest = destination(dependency_root, path, create=True)
+                if dest.exists():
+                    raise PackageError(f"build dependency file conflict: {path}")
+                write_file(dest, data, mode)
+        missing = set(spec.get("build_requires", [])) - dependency_names
+        if missing:
+            raise PackageError(f"missing build dependencies: {', '.join(sorted(missing))}")
         stage = work / "stage"
         stage.mkdir()
         env = {
-            "PATH": "/usr/bin:/bin", "HOME": str(work), "LC_ALL": "C", "TZ": "UTC",
+            "PATH": f"/usr/bin:/bin:{dependency_root}/usr/bin", "HOME": str(work), "LC_ALL": "C", "TZ": "UTC",
             "DESTDIR": str(stage), "SOURCE_ARCHIVE": str(source),
+            "AINPKG_DEPS": str(dependency_root),
+            "PKG_CONFIG_PATH": str(dependency_root / "usr/lib/pkgconfig"),
             "SOURCE_DATE_EPOCH": str(int(spec.get("source_date_epoch", 0))),
             "JOBS": str(args.jobs), "AINPKG_ARCH": arch, "AINPKG_PACKAGE": package,
         }
@@ -507,6 +527,8 @@ def main():
     source.add_argument("--recipe-archive", type=Path, help="trusted git archive for bootstrapping")
     source.add_argument("--recipe-sha256", help="trusted SHA256 of the recipe archive")
     source.add_argument("--source", type=Path, help="cached upstream archive, still hash checked")
+    source.add_argument("--build-dependency", type=Path, action="append", default=[],
+                        help="unpack a compatible package into the build's private dependency tree")
     source.add_argument("--package", type=identifier, help="select a named output from the recipe")
     source.add_argument("--output", required=True, type=Path)
     source.add_argument("--jobs", default=1, type=int, choices=range(1, 129), metavar="1..128")
