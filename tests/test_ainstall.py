@@ -109,5 +109,48 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(device.getvalue(), initial)
 
 
+class BuildImagePreflightTests(unittest.TestCase):
+    def setUp(self):
+        workspace = tempfile.TemporaryDirectory()
+        self.addCleanup(workspace.cleanup)
+        self.work = Path(workspace.name)
+        self.rootfs = self.work / "rootfs"
+        for directory in ("etc", "usr"):
+            (self.rootfs / directory).mkdir(parents=True)
+        self.kernel = self.work / "bzImage"
+        self.kernel.write_bytes(b"kernel fixture")
+        self.builder = SCRIPT.with_name("build-bios-image.sh")
+
+    def build(self, size, output):
+        return subprocess.run(
+            [str(self.builder), str(self.rootfs), str(self.kernel), size, str(output)],
+            capture_output=True, text=True,
+        )
+
+    def test_reject_existing_image_before_needing_root(self):
+        output = self.work / "existing.img"
+        output.write_bytes(b"retain")
+        result = self.build("128", output)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("output must be a new file", result.stderr)
+        self.assertEqual(output.read_bytes(), b"retain")
+
+    def test_reject_output_inside_rootfs(self):
+        output = self.rootfs / "recursive.img"
+        result = self.build("128", output)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("outside the staged rootfs", result.stderr)
+        self.assertFalse(output.exists())
+
+    def test_reject_bad_size_without_creating_output(self):
+        output = self.work / "new.img"
+        for size in ("127", "0128", "2097152"):
+            with self.subTest(size=size):
+                result = self.build(size, output)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("image size", result.stderr)
+                self.assertFalse(output.exists())
+
+
 if __name__ == "__main__":
     unittest.main()
