@@ -10,7 +10,8 @@ output_parent=$(realpath -e -- "$(dirname -- "$3")")
 output="$output_parent/$(basename -- "$3")"
 project=$(cd "$(dirname -- "$0")/.." && pwd)
 kernel_release=7.1.8-ainow-eeepc-1005p
-kernel_sha=5ca6b1993c82d7eec95eb2cfaf0176cfcf252f63b7fe908bf46776b61417081f
+kernel_sha=${AINOW_EEEPC_KERNEL_SHA256:-5ca6b1993c82d7eec95eb2cfaf0176cfcf252f63b7fe908bf46776b61417081f}
+[[ "$kernel_sha" =~ ^[a-f0-9]{64}$ ]] || fail 'expected a lowercase kernel SHA256'
 mib=1048576
 
 [[ -f "$raw" && -f "$bundle" ]] || fail 'both inputs must be regular files'
