@@ -4,6 +4,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import sqlite3
 import subprocess
 import tarfile
@@ -271,6 +272,23 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(entries["usr/bin/demo"][0], b"pinned source")
         self.assertEqual(manifest["recipe_commit"], subprocess.check_output(
             ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip())
+        recipe_archive = self.work / "recipe.tar"
+        with recipe_archive.open("wb") as stream:
+            subprocess.run(["git", "-C", str(repo), "archive", "HEAD", "packages/demo"],
+                           stdout=stream, check=True)
+        no_git = self.work / "no-git"
+        no_git.mkdir()
+        for tool in ("python3", "bash", "zstd"):
+            (no_git / tool).symlink_to(shutil.which(tool))
+        env = dict(os.environ, PATH=str(no_git))
+        bootstrap = self.work / "bootstrap.ainpkg"
+        options = ("build", "demo", "--recipe-archive", recipe_archive,
+                   "--source", source, "--output", bootstrap)
+        self.assertIn("recipe archive SHA256 mismatch", self.cli(
+            *options, "--recipe-sha256", "0" * 64, ok=False, env=env))
+        self.assertFalse(bootstrap.exists())
+        self.cli(*options, "--recipe-sha256", ainpkg.file_digest(recipe_archive), env=env)
+        self.assertEqual(bootstrap.read_bytes(), output.read_bytes())
         source.write_bytes(b"tampered source")
         rejected = self.work / "rejected.ainpkg"
         self.assertIn("source archive SHA256 mismatch",

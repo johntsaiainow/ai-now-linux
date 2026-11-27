@@ -1,6 +1,6 @@
 # Chapter 11 · Hybrid source/binary packages
 
-`scripts/ainpkg` runs with Python 3.12 or newer and the `zstd` CLI. Source builds also require Git, Bash and the recipe toolchain. GitHub release transfers require `gh` and appropriate GitHub access.
+`scripts/ainpkg` runs with Python 3.12 or newer and the `zstd` CLI. Source builds also require Bash and the recipe toolchain. Use Git or a verified Git recipe export. GitHub release transfers require `gh` and appropriate GitHub access.
 
 ## Build from a Git recipe
 
@@ -15,6 +15,8 @@ scripts/ainpkg build openssh --repo . --ref "$ref" \
 The builder reads `packages/openssh/{recipe.toml,build.sh}` from the committed Git tree, verifies the upstream archive against the recipe SHA256 and invokes Bash as an unprivileged user with a private workspace and `DESTDIR`. Pass `--source /path/to/upstream.tar.gz` for a cached archive with the same required digest. Build on the intended native ABI with the declared CPU baseline. Build scripts execute as the invoking user and must come from reviewed commits. Use a disposable VM or equivalent isolation for that build user. The builder does not mount, enter or receive the target root.
 
 The package format is zstd-compressed tar with a JSON manifest and sorted regular-file payloads under `usr/`, `etc/` or `opt/`. Package entries have normalized archive ownership and timestamps. Packages record the recipe commit, versions, compatibility tuple, file modes and SHA256 checksums. The installer checks exact Linux machine architecture, glibc version label and CPU baseline labels. The operator establishes the offline root's identity and separately checks its runtime libraries and actual CPU support. Dependency resolution, ELF validation and managed links are outside this milestone.
+
+For a Genesis guest without Git, follow the [Git bootstrap procedure](git-bootstrap.md).
 
 ## Inspect a package and preview changes
 

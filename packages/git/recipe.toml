@@ -1,0 +1,10 @@
+name = "git"
+version = "2.56.1+bootstrap"
+source_date_epoch = 1794355200
+
+[cpu]
+x86_64 = "x86-64-v1"
+
+[source]
+url = "https://www.kernel.org/pub/software/scm/git/git-2.56.1.tar.xz"
+sha256 = "f0b0bf89264b9bd2e1c640363e7529643989da76281600473c50745cd34a607f"

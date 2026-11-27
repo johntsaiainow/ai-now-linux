@@ -181,20 +181,51 @@ def pack(output, metadata, stage):
         os.link(compressed, output)
 
 
+def export_recipe(args, work, subdir):
+    if args.recipe_archive:
+        if args.repo or args.ref or not SHA256.fullmatch(args.recipe_sha256 or ""):
+            raise PackageError("a recipe archive requires --recipe-sha256 and excludes --repo/--ref")
+        with args.recipe_archive.open("rb") as stream:
+            exported = stream.read(8 * 1024 * 1024 + 1)
+        if len(exported) > 8 * 1024 * 1024:
+            raise PackageError("recipe archive exceeds 8 MiB")
+        if digest(exported) != args.recipe_sha256:
+            raise PackageError("recipe archive SHA256 mismatch")
+    else:
+        if args.recipe_sha256:
+            raise PackageError("--recipe-sha256 requires --recipe-archive")
+        repo = args.repo or "."
+        ref = args.ref or "HEAD"
+        revision = subprocess.check_output(
+            ["git", "-C", repo, "rev-parse", "--verify", "--end-of-options",
+             ref + "^{commit}"], text=True).strip()
+        exported = subprocess.check_output(
+            ["git", "-C", repo, "archive", "--format=tar", revision, subdir])
+    with tarfile.open(fileobj=io.BytesIO(exported), mode="r:") as archive:
+        revision = archive.pax_headers.get("comment", "")
+        if not re.fullmatch(r"(?:[a-f0-9]{40}|[a-f0-9]{64})", revision):
+            raise PackageError("expected an uncompressed git archive of a committed recipe")
+        seen = set()
+        for member in archive.getmembers():
+            parts = member.name.split("/")
+            path = member.name
+            if (path in seen or any(part in {"", ".", ".."} for part in parts)
+                    or not (path in {"packages", subdir} or path.startswith(subdir + "/"))
+                    or not (member.isdir() or member.type == tarfile.REGTYPE)):
+                raise PackageError(f"unsupported recipe entry: {path}")
+            seen.add(path)
+        archive.extractall(work, filter="data")
+    return revision
+
+
 def build(args):
     if os.geteuid() == 0:
         raise PackageError("run trusted recipe builds as an unprivileged user")
     recipe = identifier(args.recipe)
     subdir = f"packages/{recipe}"
-    revision = subprocess.check_output(
-        ["git", "-C", args.repo, "rev-parse", "--verify", "--end-of-options",
-         args.ref + "^{commit}"], text=True).strip()
     with tempfile.TemporaryDirectory(prefix="ainpkg-build-") as temporary:
         work = Path(temporary)
-        exported = subprocess.check_output(
-            ["git", "-C", args.repo, "archive", revision, subdir])
-        with tarfile.open(fileobj=io.BytesIO(exported), mode="r:") as archive:
-            archive.extractall(work, filter="data")
+        revision = export_recipe(args, work, subdir)
         recipe_dir = work / subdir
         with (recipe_dir / "recipe.toml").open("rb") as stream:
             spec = tomllib.load(stream)
@@ -468,8 +499,10 @@ def main():
         init.add_argument(f"--{field}", required=True, type=identifier)
     source = commands.add_parser("build")
     source.add_argument("recipe")
-    source.add_argument("--repo", default=".")
-    source.add_argument("--ref", default="HEAD")
+    source.add_argument("--repo", help="local Git repository, default current directory")
+    source.add_argument("--ref", help="Git commit or ref, default HEAD")
+    source.add_argument("--recipe-archive", type=Path, help="trusted git archive for bootstrapping")
+    source.add_argument("--recipe-sha256", help="trusted SHA256 of the recipe archive")
     source.add_argument("--source", type=Path, help="cached upstream archive, still hash checked")
     source.add_argument("--output", required=True, type=Path)
     source.add_argument("--jobs", default=1, type=int, choices=range(1, 129), metavar="1..128")
