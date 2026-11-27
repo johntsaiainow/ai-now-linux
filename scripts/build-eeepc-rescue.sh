@@ -96,6 +96,8 @@ if [[ -e "$stage/boot/initrd.img" || -L "$stage/boot/initrd.img" ]]; then
     mv -- "$stage/boot/initrd.img" "$work/genesis-initrd"
 fi
 
+export AINOW_BOOT_PROFILE=eeepc
+
 deploy="$products/eeepc-deploy.img"
 rescue="$products/eeepc-rescue.img"
 "$project/scripts/build-bios-image.sh" "$stage" "$kernel_stage/bzImage" "$deploy_mib" "$deploy"
