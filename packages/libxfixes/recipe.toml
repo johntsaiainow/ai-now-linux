@@ -1,0 +1,10 @@
+name = "libxfixes"
+version = "6.0.2"
+build_requires = ["xorgproto", "libx11", "libxcb", "libxau", "libxdmcp"]
+
+[cpu]
+x86_64 = "x86-64-v1"
+
+[source]
+url = "https://xorg.freedesktop.org/archive/individual/lib/libXfixes-6.0.2.tar.xz"
+sha256 = "39f115d72d9c5f8111e4684164d3d68cc1fd21f9b27ff2401b08fddfc0f409ba"
