@@ -2,3 +2,8 @@ OnDesktop Mouse3 :RootMenu
 Control Mod1 T :Exec /usr/bin/genesis-terminal
 Mod1 Tab :NextWindow
 Mod1 F4 :Close
+OnDesktop Mouse1 :HideMenus
+OnTitlebar Mouse1 :MacroCmd {Raise} {Focus} {ActivateTab}
+OnTitlebar Move1 :StartMoving
+OnLeftGrip Move1 :StartResizing bottomleft
+OnRightGrip Move1 :StartResizing bottomright

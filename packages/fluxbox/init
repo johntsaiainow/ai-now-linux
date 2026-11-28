@@ -1,8 +1,9 @@
+session.configVersion: 13
 session.styleFile: /usr/share/ainow/genesis-desktop/style
 session.menuFile: /usr/share/ainow/genesis-desktop/menu
 session.keyFile: /usr/share/ainow/genesis-desktop/keys
 session.screen0.workspaces: 2
-session.screen0.workspaceNames: Main, Console
+session.screen0.workspaceNames: Main,Console
 session.screen0.toolbar.visible: true
 session.screen0.toolbar.placement: BottomCenter
 session.screen0.toolbar.widthPercent: 100
