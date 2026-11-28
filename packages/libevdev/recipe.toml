@@ -1,0 +1,9 @@
+name = "libevdev"
+version = "1.13.6"
+
+[cpu]
+x86_64 = "x86-64-v1"
+
+[source]
+url = "https://www.freedesktop.org/software/libevdev/libevdev-1.13.6.tar.xz"
+sha256 = "73f215eccbd8233f414737ac06bca2687e67c44b97d2d7576091aa9718551110"
