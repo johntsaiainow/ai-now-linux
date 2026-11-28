@@ -1,0 +1,5 @@
+[begin] (Genesis)
+    [exec] (Terminal) {/usr/bin/genesis-terminal}
+    [separator]
+    [exit] (End session)
+[end]

@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+umask 077
+assets=/usr/share/ainow/genesis-desktop
+config_dir=${XDG_CONFIG_HOME:-"$HOME/.config"}/ainow-genesis-desktop
+mkdir -p "$config_dir"
+if [ ! -e "$config_dir/init" ]; then
+    (set -C; cat "$assets/init" >"$config_dir/init")
+fi
+/usr/bin/genesis-terminal &
+exec /usr/bin/fluxbox -rc "$config_dir/init"

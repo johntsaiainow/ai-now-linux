@@ -1,0 +1,10 @@
+name = "fluxbox"
+version = "1.3.7"
+build_requires = ["xorgproto", "libx11", "libxcb", "libxau", "libxdmcp", "libxext", "libxrender"]
+
+[cpu]
+x86_64 = "x86-64-v1"
+
+[source]
+url = "https://sources.buildroot.net/fluxbox/fluxbox-1.3.7.tar.xz"
+sha256 = "fc8c75fe94c54ed5a5dd3fd4a752109f8949d6df67a48e5b11a261403c382ec0"

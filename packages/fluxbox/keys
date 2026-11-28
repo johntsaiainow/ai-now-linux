@@ -1,0 +1,4 @@
+OnDesktop Mouse3 :RootMenu
+Control Mod1 T :Exec /usr/bin/genesis-terminal
+Mod1 Tab :NextWindow
+Mod1 F4 :Close

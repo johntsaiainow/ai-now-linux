@@ -1,0 +1,58 @@
+background: solid
+background.color: #101820
+
+borderWidth: 1
+bevelWidth: 2
+window.borderColor: #334851
+window.title.height: 22
+window.font: fixed
+window.title.focus: Flat Solid
+window.title.focus.color: #244047
+window.title.unfocus: Flat Solid
+window.title.unfocus.color: #1C282E
+window.label.focus: ParentRelative
+window.label.focus.textColor: #E0F2EF
+window.label.unfocus: ParentRelative
+window.label.unfocus.textColor: #9BB5B5
+window.button.focus: ParentRelative
+window.button.focus.picColor: #5DE4C7
+window.button.unfocus: ParentRelative
+window.button.unfocus.picColor: #9BB5B5
+window.handleWidth: 3
+window.handle.focus: Flat Solid
+window.handle.focus.color: #244047
+window.handle.unfocus: Flat Solid
+window.handle.unfocus.color: #1C282E
+
+toolbar: Flat Solid
+toolbar.color: #1C282E
+toolbar.borderColor: #334851
+toolbar.borderWidth: 1
+toolbar.workspace: ParentRelative
+toolbar.workspace.font: fixed
+toolbar.workspace.textColor: #5DE4C7
+toolbar.clock: ParentRelative
+toolbar.clock.font: fixed
+toolbar.clock.textColor: #D8E8E4
+toolbar.iconbar.focused: Flat Solid
+toolbar.iconbar.focused.color: #244047
+toolbar.iconbar.focused.font: fixed
+toolbar.iconbar.focused.textColor: #E0F2EF
+toolbar.iconbar.unfocused: Flat Solid
+toolbar.iconbar.unfocused.color: #1C282E
+toolbar.iconbar.unfocused.font: fixed
+toolbar.iconbar.unfocused.textColor: #9BB5B5
+
+menu.borderColor: #334851
+menu.borderWidth: 1
+menu.title: Flat Solid
+menu.title.color: #244047
+menu.title.font: fixed
+menu.title.textColor: #5DE4C7
+menu.frame: Flat Solid
+menu.frame.color: #1C282E
+menu.frame.font: fixed
+menu.frame.textColor: #D8E8E4
+menu.hilite: Flat Solid
+menu.hilite.color: #35535B
+menu.hilite.textColor: #F0FAF8
