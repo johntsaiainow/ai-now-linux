@@ -107,6 +107,11 @@ menuentry 'AI-Now Linux (local console, basic display)' --id local {
     linux /boot/vmlinuz root=PARTUUID=$partuuid rw rootwait console=tty0 nomodeset loglevel=7
     $initrd
 }
+menuentry 'AI-Now Linux (local console, native graphics)' --id graphics {
+    search --no-floppy --fs-uuid --set=root $uuid
+    linux /boot/vmlinuz root=PARTUUID=$partuuid rw rootwait console=tty0
+    $initrd
+}
 GRUB
 
 if [[ $# == 6 ]]; then
