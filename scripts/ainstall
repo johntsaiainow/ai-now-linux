@@ -2,7 +2,7 @@
 """Deploy a verified AI-Now Linux BIOS disk image from rescue media."""
 
 import argparse
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 import fcntl
 import hashlib
 import json
@@ -152,7 +152,7 @@ def disk_target(source, path, size, expected, apply):
         copy_and_verify(source, device, size, expected)
 
 
-def configure_disk(disk, partuuid):
+def configure_disk(disk, partuuid, kernel=None):
     subprocess.run(["blockdev", "--rereadpt", disk], check=True)
     subprocess.run(["udevadm", "settle", "--timeout=10"], check=True)
     sys_disk = (Path("/sys/class/block") / disk.name).resolve(strict=True)
@@ -174,6 +174,9 @@ def configure_disk(disk, partuuid):
     try:
         subprocess.run(["mount", "-t", "ext4", "--", partition, mountpoint], check=True)
         try:
+            if kernel:
+                from ainow_kernel import install_kernel
+                install_kernel(mountpoint, kernel)
             subprocess.run(["/usr/local/sbin/ainow-setup", "--root", mountpoint], check=True)
         finally:
             subprocess.run(["umount", "--", mountpoint], check=True)
@@ -192,7 +195,11 @@ def main():
     parser.add_argument("--apply", action="store_true", help="perform the displayed installation")
     parser.add_argument("--configure", action="store_true",
                         help="configure the installed system before rebooting")
+    parser.add_argument("--kernel-catalog", type=Path,
+                        help="override the trusted kernel catalog on the installer media")
     args = parser.parse_args()
+    if args.kernel_catalog is not None and not args.configure:
+        raise InstallError("--kernel-catalog requires --configure")
     if args.configure and (args.disk is None or not args.apply):
         raise InstallError("--configure requires --disk and --apply")
     if args.configure and not os.access("/usr/local/sbin/ainow-setup", os.X_OK):
@@ -205,23 +212,35 @@ def main():
     if not re.fullmatch(r"[a-f0-9]{64}", args.sha256):
         raise InstallError("SHA256 must be 64 lowercase hexadecimal digits")
     fd = os.open(args.image, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    with os.fdopen(fd, "rb") as source:
+    with ExitStack() as stack:
+        source = stack.enter_context(os.fdopen(fd, "rb"))
         size = check_image(source, args.sha256)
         print(f"Verified image: {args.image} ({size} bytes)")
         print(f"SHA256: {args.sha256}")
         if args.disk is not None:
+            kernel = None
             if args.configure:
+                from ainow_kernel import CATALOG, prepare_kernel
+
                 disk = args.disk.resolve(strict=True)
                 source.seek(440)
                 signature = int.from_bytes(source.read(4), "little")
                 if not signature:
                     raise InstallError("configured installation requires an MBR disk signature")
+                catalog = args.kernel_catalog or CATALOG
+                if args.kernel_catalog or catalog.is_file():
+                    if not sys.stdin.isatty():
+                        raise InstallError("kernel selection requires an interactive terminal")
+                    workspace = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="ainstall-kernel-")))
+                    kernel = prepare_kernel(catalog, workspace)
+                    if kernel and any(not shutil.which(tool) for tool in ("depmod", "grub-script-check")):
+                        raise InstallError("kernel selection needs depmod and grub-script-check")
             disk_target(source, args.disk, size, args.sha256, args.apply)
             if args.configure:
                 if args.disk.resolve(strict=True) != disk:
                     raise InstallError("installed disk identifier changed")
                 print("Image written and verified. Starting target setup.", flush=True)
-                configure_disk(disk, f"{signature:08x}-01")
+                configure_disk(disk, f"{signature:08x}-01", kernel)
         else:
             file_target(source, args.output, size, args.sha256, args.apply)
     print("Installation verified." if args.apply else "Preview complete. No data written.")

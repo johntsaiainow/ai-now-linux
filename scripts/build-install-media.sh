@@ -66,7 +66,7 @@ products="$work/products"
 mkdir -- "$stage" "$products"
 cp -ax -- "$root/." "$stage/"
 for path in etc/ainow-hardware-profile usr/local/sbin/ainow-setup \
-            usr/local/lib/ainow/ainpkg opt/ainow-packages; do
+            usr/local/lib/ainow/ainpkg opt/ainow-packages opt/ainow-kernels/catalog.json; do
     [[ $(realpath -m -- "$stage/$path") == "$stage/$path" ]] ||
         fail "unexpected symlink in $path"
 done
@@ -77,6 +77,9 @@ if [[ $# == 6 ]]; then
     [[ ! -e "$stage/opt/ainow-packages" ]] ||
         fail 'the staged root already contains an offline package catalog'
     cp -ax -- "$catalog" "$stage/opt/ainow-packages"
+fi
+if [[ -n ${AINOW_KERNEL_CATALOG:-} ]]; then
+    install -Dm644 -- "$AINOW_KERNEL_CATALOG" "$stage/opt/ainow-kernels/catalog.json"
 fi
 
 export AINOW_BOOT_PROFILE=console

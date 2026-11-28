@@ -119,9 +119,11 @@ GRUB
 
 if [[ $# == 6 ]]; then
     verify_path usr/local/sbin/ainstall
+    verify_path usr/local/sbin/ainow_kernel.py
     verify_path opt/ainow-install/deploy.img
     verify_path opt/ainow-install/SHA256SUMS
     install -Dm755 -- "$project/scripts/ainstall" "$mount_dir/usr/local/sbin/ainstall"
+    install -Dm644 -- "$project/scripts/ainow_kernel.py" "$mount_dir/usr/local/sbin/ainow_kernel.py"
     install -Dm644 -- "$payload" "$mount_dir/opt/ainow-install/deploy.img"
     printf '%s  deploy.img\n' "$digest" > "$mount_dir/opt/ainow-install/SHA256SUMS"
     (cd "$mount_dir/opt/ainow-install" && sha256sum -c SHA256SUMS)

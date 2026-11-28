@@ -140,3 +140,39 @@ The builders require the actual staged rootfs and matching kernel artifacts
 on the build host. Test a new image with a disposable QEMU disk first,
 including the guided setup and a separate boot of the installed disk. Then
 verify graphics, Wi-Fi association, DHCP and DNS on the physical EeePC.
+
+## Download a kernel during installation
+
+The installer boots with its bundled kernel. The kernel selected for the
+installed system can come from an HTTPS package server or a GitHub Release.
+An x86-64 installer offers x86-64 kernels such as Generic 64-bit and the Eee PC
+1005P build. An i686 installer offers the Generic 32-bit kernel and compatible
+custom builds. Each architecture requires its matching Genesis userspace.
+Use an installer kernel that supports the network hardware you need during
+installation.
+
+The release publisher supplies a trusted JSON catalog containing a list of
+objects. Each object has a display `name`, `arch` (`x86_64` or `i686`),
+exact kernel `release`, HTTPS `url`, compressed byte `size`, and lowercase
+`sha256`. Packages are gzip-compressed tar archives. Include `bzImage` or
+`boot/vmlinuz-RELEASE`, plus `lib/modules/RELEASE` including `modules.dep`.
+If the kernel needs an initramfs, include `boot/initrd-RELEASE.img`. The
+new kernel must support the target disk and its ext4 root filesystem.
+Publish kernels under distinct release strings so their modules can coexist
+with the bundled kernel's modules. The catalog is kept on trusted installer
+media. Update it when the kernel release artifacts change.
+
+To embed the catalog while building the media, pass
+`AINOW_KERNEL_CATALOG=/path/to/catalog.json` in the environment of
+`build-install-media.sh`. Alternatively, pass the trusted local catalog as
+`--kernel-catalog /path/to/catalog.json` to `ainstall --apply --configure`.
+Bring up Ethernet or Wi-Fi in the installer session before requesting a
+download. Wi-Fi setup for the installed system happens later and takes effect
+on its first boot.
+
+Before the disk-write confirmation, choose a download or keep the bundled
+kernel. A failed download or checksum check stops before disk writes. The
+installer verifies the selected kernel's architecture and release, installs
+its modules and creates a new default GRUB entry. The bundled kernel remains
+available in GRUB as a fallback. Continue with desktop, package and account
+selection after the kernel is installed.
