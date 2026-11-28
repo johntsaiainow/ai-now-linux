@@ -1,0 +1,9 @@
+name = "xkeyboard-config"
+version = "2.49"
+
+[cpu]
+x86_64 = "x86-64-v1"
+
+[source]
+url = "https://anduin.linuxfromscratch.org/BLFS/xkeyboard/xkeyboard-config-2.49.tar.xz"
+sha256 = "c49cb51f26d6c3061d329fd2771ce429fe6de20eba295f4e3abd8950252ac845"
