@@ -1,0 +1,206 @@
+#!/usr/bin/env python3
+"""Configure an AI-Now Linux target mounted by the installer."""
+
+import argparse
+from datetime import datetime
+from getpass import getpass
+import hashlib
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
+
+
+def run(*command, **options):
+    return subprocess.run(command, check=True, **options)
+
+
+def replace(path, data, mode=0o644):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            os.fchmod(stream.fileno(), mode)
+            stream.write(data)
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def packages(directory, required=False):
+    manifest = directory / "SHA256SUMS"
+    if not manifest.is_file():
+        if required:
+            raise ValueError(f"Missing offline package group: {directory.name}")
+        return {}
+    result = {}
+    for line in manifest.read_text(encoding="ascii").splitlines():
+        match = re.fullmatch(r"([a-f0-9]{64}) [ *]([a-z0-9][a-z0-9.+_-]*\.ainpkg)", line)
+        if not match:
+            raise ValueError(f"Invalid package checksum entry: {manifest}")
+        checksum, name = match.groups()
+        if name[:-7] in result:
+            raise ValueError(f"Duplicate package: {name}")
+        archive = directory / name
+        with archive.open("rb") as stream:
+            if hashlib.file_digest(stream, "sha256").hexdigest() != checksum:
+                raise ValueError(f"Package checksum mismatch: {name}")
+        result[name[:-7]] = archive
+    if not result:
+        raise ValueError(f"Empty package group: {directory.name}")
+    return result
+
+
+def install_packages(root, archives, profile):
+    if not archives:
+        return
+    cli = [sys.executable, "/usr/local/lib/ainow/ainpkg", "--root", str(root)]
+    arch, cpu = ("i686", "i686") if profile == "generic32" else ("x86_64", "x86-64-v1")
+    abi = subprocess.check_output(["chroot", root, "getconf", "GNU_LIBC_VERSION"], text=True)
+    run(*cli, "init", "--arch", arch, "--abi", abi.strip().replace(" ", "-"), "--cpu", cpu)
+    for archive in dict.fromkeys(archives):
+        run(*cli, "install", str(archive))
+    run(*cli, "verify")
+
+
+def wifi_settings(root, interface, ssid, passphrase):
+    ssid_bytes = ssid.encode()
+    if not 1 <= len(ssid_bytes) <= 32:
+        raise ValueError("Wi-Fi SSID must be 1 to 32 bytes")
+    if not 8 <= len(passphrase) <= 63 or not all(32 <= ord(c) < 127 for c in passphrase):
+        raise ValueError("WPA2 passphrase must be 8 to 63 printable ASCII characters")
+    if not re.fullmatch(r"[a-zA-Z0-9_.-]{1,15}", interface):
+        raise ValueError("Invalid Wi-Fi interface name")
+    if not (root / "usr/sbin/wpa_supplicant").is_file():
+        raise ValueError("Wi-Fi requires the offline wifi package group or a staged wpa_supplicant")
+    for service in ("systemd-networkd", "systemd-resolved"):
+        if not (root / f"usr/lib/systemd/system/{service}.service").is_file():
+            raise ValueError(f"Wi-Fi needs {service} in the staged system")
+    key = hashlib.pbkdf2_hmac("sha1", passphrase.encode("ascii"), ssid_bytes, 4096, 32).hex()
+    device = subprocess.check_output(
+        ["systemd-escape", "--path", "--suffix=device", f"/sys/subsystem/net/devices/{interface}"],
+        text=True,
+    ).strip()
+    replace(root / "etc/ainow/wifi.conf",
+            f"network={{\n    ssid={ssid_bytes.hex()}\n    psk={key}\n    key_mgmt=WPA-PSK\n}}\n", 0o600)
+    replace(root / "etc/systemd/network/05-ainow-wifi.network",
+            f"[Match]\nName={interface}\n\n[Network]\nDHCP=yes\n")
+    replace(root / "etc/systemd/system/ainow-wifi.service",
+            "[Unit]\nDescription=Genesis Wi-Fi authentication\n"
+            f"BindsTo={device}\n"
+            f"After={device}\n"
+            "[Service]\n"
+            f"ExecStart=/usr/sbin/wpa_supplicant -i{interface} -c/etc/ainow/wifi.conf\n"
+            "Restart=on-failure\n\n[Install]\nWantedBy=multi-user.target\n")
+    run("systemctl", "--root", root, "enable", "ainow-wifi.service",
+        "systemd-networkd.service", "systemd-resolved.service")
+    resolver = root / "etc/resolv.conf"
+    resolver.unlink(missing_ok=True)
+    resolver.symlink_to("../run/systemd/resolve/stub-resolv.conf")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--root", required=True, type=Path)
+    args = parser.parse_args()
+    root = args.root.resolve(strict=True)
+    if os.geteuid() or root == Path("/") or not sys.stdin.isatty():
+        raise ValueError("Setup needs root, an interactive terminal and a separate mounted target")
+    run("mountpoint", "-q", str(root))
+    profile = (root / "etc/ainow-hardware-profile").read_text().strip()
+    if profile not in {"generic32", "generic64", "eeepc1005p"}:
+        raise ValueError("Unknown hardware profile")
+    catalog = root / "opt/ainow-packages"
+    print(f"Configuring {profile} at {root}")
+    modes = {"1": "console"}
+    print("1. Console")
+    if (catalog / "x11/SHA256SUMS").is_file():
+        modes["2"] = "x11"
+        print("2. X11 + xterm")
+        if (catalog / "fluxbox/SHA256SUMS").is_file():
+            modes["3"] = "fluxbox"
+            print("3. X11 + Fluxbox")
+    choice = input("Desktop [1]: ").strip() or "1"
+    if choice not in modes:
+        raise ValueError("Choose an available desktop")
+    mode = modes[choice]
+    archives = []
+    if mode != "console":
+        archives.extend(packages(catalog / "x11", required=True).values())
+    if mode == "fluxbox":
+        archives.extend(packages(catalog / "fluxbox", required=True).values())
+    extras = packages(catalog / "extras")
+    if extras:
+        print("Optional packages:", ", ".join(extras))
+        selected = input("Package names, or Enter to skip: ").split()
+        if set(selected) - extras.keys():
+            raise ValueError("Unknown optional package")
+        archives.extend(extras[name] for name in selected)
+
+    locale = input("Locale [C.UTF-8]: ").strip() or "C.UTF-8"
+    language = re.fullmatch(r"([a-z]{2,3}_[A-Z]{2})\.UTF-8", locale)
+    if locale != "C.UTF-8" and not language:
+        raise ValueError("Use C.UTF-8 or a locale such as zh_TW.UTF-8")
+    timezone = input("Time zone [UTC]: ").strip() or "UTC"
+    zoneinfo = root / "usr/share/zoneinfo"
+    zone = (zoneinfo / timezone).resolve()
+    if not zone.is_relative_to(zoneinfo) or not zone.is_file():
+        raise ValueError("Unknown time zone")
+    clock = input("Set local date and time [YYYY-MM-DD HH:MM, Enter to keep clock]: ").strip()
+    if clock:
+        clock = datetime.strptime(clock, "%Y-%m-%d %H:%M").isoformat(sep=" ")
+    username = input("New local user (Enter to skip): ").strip()
+    if username and not re.fullmatch(r"[a-z_][a-z0-9_-]{0,30}", username):
+        raise ValueError("Invalid local username")
+    users = {fields[0]: int(fields[2]) for line in (root / "etc/passwd").read_text().splitlines()
+             if len(fields := line.split(":")) == 7}
+    if username and username in users and users[username] < 1000:
+        raise ValueError("Choose a name for a regular user account")
+    password = getpass("Password: ") if username else ""
+    if username and (not password or "\x00" in password or password != getpass("Repeat password: ")):
+        raise ValueError("Passwords are empty or differ")
+
+    ssid = input("WPA2 Wi-Fi SSID (Enter to skip): ")
+    if ssid:
+        wireless = [p.parent.name for p in Path("/sys/class/net").glob("*/wireless")]
+        default = wireless[0] if len(wireless) == 1 else ""
+        interface = input(f"Wi-Fi interface [{default or 'e.g. wlp2s0'}]: ").strip() or default
+        wifi_password = getpass("Wi-Fi passphrase: ")
+        archives.extend(packages(catalog / "wifi").values())
+
+    install_packages(root, archives, profile)
+    if language:
+        run("chroot", root, "localedef", "-i", language[1], "-f", "UTF-8", locale)
+    replace(root / "etc/locale.conf", f"LANG={locale}\n")
+    localtime = root / "etc/localtime"
+    localtime.unlink(missing_ok=True)
+    localtime.symlink_to(f"../usr/share/zoneinfo/{timezone}")
+
+    if username:
+        if username not in users:
+            run("useradd", "--root", root, "--create-home", "--shell", "/bin/bash", username)
+        run("chpasswd", "--root", root, input=f"{username}:{password}\n", text=True)
+    if ssid:
+        wifi_settings(root, interface, ssid, wifi_password)
+    if (root / "usr/lib/systemd/system/systemd-timesyncd.service").is_file():
+        run("systemctl", "--root", root, "enable", "systemd-timesyncd.service")
+    if clock:
+        environment = dict(os.environ, TZ=f":{zone}")
+        run("date", "--set", clock, env=environment)
+        if Path("/dev/rtc").exists() or Path("/dev/rtc0").exists():
+            run("hwclock", "--systohc", "--utc")
+    replace(root / "etc/ainow-session", f"{mode}\n")
+    print("Setup complete. The installed system boots to a local console.")
+    if mode == "x11":
+        print("Start the X11 session from the local console with: startx")
+    if mode == "fluxbox":
+        print("Start Fluxbox from the local console with: startx /usr/bin/genesis-session")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, ValueError, EOFError, subprocess.CalledProcessError) as error:
+        sys.exit(f"ainow-setup: {error}")

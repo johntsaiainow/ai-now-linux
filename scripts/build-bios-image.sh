@@ -93,7 +93,10 @@ grub-install --target=i386-pc --boot-directory="$mount_dir/boot" --recheck "$loo
 initrd=
 if [[ -f "$mount_dir/boot/initrd.img" ]]; then initrd='initrd /boot/initrd.img'; fi
 default_entry=serial
-if [[ ${AINOW_BOOT_PROFILE:-} == eeepc ]]; then default_entry=local; fi
+case "${AINOW_BOOT_PROFILE:-}" in
+    eeepc) default_entry=local ;;
+    console) default_entry=graphics ;;
+esac
 cat > "$mount_dir/boot/grub/grub.cfg" <<GRUB
 set default=$default_entry
 set timeout=5

@@ -61,6 +61,12 @@ class InstallTests(unittest.TestCase):
         self.assertIn("SHA256 mismatch", result.stderr)
         self.assertFalse(self.output.exists())
 
+    def test_guided_setup_requires_an_applied_disk_install(self):
+        result = self.cli("--apply", "--configure")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--configure requires --disk and --apply", result.stderr)
+        self.assertFalse(self.output.exists())
+
     def test_boot_layout_validated_before_writing(self):
         for offset, value in [(512, b"EFI PART"), (450, b"\xee"), (454, b"\x01\x00")]:
             with self.subTest(offset=offset):

@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import stat
 import struct
 import subprocess
@@ -151,6 +152,36 @@ def disk_target(source, path, size, expected, apply):
         copy_and_verify(source, device, size, expected)
 
 
+def configure_disk(disk, partuuid):
+    subprocess.run(["blockdev", "--rereadpt", disk], check=True)
+    subprocess.run(["udevadm", "settle", "--timeout=10"], check=True)
+    sys_disk = (Path("/sys/class/block") / disk.name).resolve(strict=True)
+    partitions = [entry for entry in sys_disk.iterdir()
+                  if (entry / "partition").is_file() and (entry / "partition").read_text().strip() == "1"]
+    if len(partitions) != 1:
+        raise InstallError("could not find partition 1 on the selected disk")
+    partition = Path("/dev") / partitions[0].name
+    device = partition.stat()
+    number = f"{os.major(device.st_rdev)}:{os.minor(device.st_rdev)}"
+    if not stat.S_ISBLK(device.st_mode) or number != (partitions[0] / "dev").read_text().strip():
+        raise InstallError("partition device identity changed")
+    actual = subprocess.check_output(
+        ["blkid", "-s", "PARTUUID", "-o", "value", "--", partition], text=True,
+    ).strip()
+    if actual.lower() != partuuid:
+        raise InstallError("partition identifiers do not match the verified image")
+    mountpoint = Path(tempfile.mkdtemp(prefix="ainstall-target-"))
+    try:
+        subprocess.run(["mount", "-t", "ext4", "--", partition, mountpoint], check=True)
+        try:
+            subprocess.run(["/usr/local/sbin/ainow-setup", "--root", mountpoint], check=True)
+        finally:
+            subprocess.run(["umount", "--", mountpoint], check=True)
+    finally:
+        if not os.path.ismount(mountpoint):
+            mountpoint.rmdir()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", type=Path, required=True, help="prepared BIOS/MBR payload")
@@ -159,7 +190,18 @@ def main():
     destination.add_argument("--output", type=Path, help="new regular file for rehearsal")
     destination.add_argument("--disk", type=Path, help="whole disk under /dev/disk/by-id")
     parser.add_argument("--apply", action="store_true", help="perform the displayed installation")
+    parser.add_argument("--configure", action="store_true",
+                        help="configure the installed system before rebooting")
     args = parser.parse_args()
+    if args.configure and (args.disk is None or not args.apply):
+        raise InstallError("--configure requires --disk and --apply")
+    if args.configure and not os.access("/usr/local/sbin/ainow-setup", os.X_OK):
+        raise InstallError("use Genesis installation media with ainow-setup")
+    if args.configure:
+        missing = [tool for tool in ("blockdev", "udevadm", "blkid", "mount", "umount")
+                   if not shutil.which(tool)]
+        if missing:
+            raise InstallError(f"missing target setup tools: {', '.join(missing)}")
     if not re.fullmatch(r"[a-f0-9]{64}", args.sha256):
         raise InstallError("SHA256 must be 64 lowercase hexadecimal digits")
     fd = os.open(args.image, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -168,7 +210,18 @@ def main():
         print(f"Verified image: {args.image} ({size} bytes)")
         print(f"SHA256: {args.sha256}")
         if args.disk is not None:
+            if args.configure:
+                disk = args.disk.resolve(strict=True)
+                source.seek(440)
+                signature = int.from_bytes(source.read(4), "little")
+                if not signature:
+                    raise InstallError("configured installation requires an MBR disk signature")
             disk_target(source, args.disk, size, args.sha256, args.apply)
+            if args.configure:
+                if args.disk.resolve(strict=True) != disk:
+                    raise InstallError("installed disk identifier changed")
+                print("Image written and verified. Starting target setup.", flush=True)
+                configure_disk(disk, f"{signature:08x}-01")
         else:
             file_target(source, args.output, size, args.sha256, args.apply)
     print("Installation verified." if args.apply else "Preview complete. No data written.")

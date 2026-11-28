@@ -74,10 +74,69 @@ bash -n scripts/build-kernel-profile.sh
 
 Installer tests use small synthetic images and exercise previews, exact copy, input validation, rejection of existing paths and interactive disk confirmation. These tests do not boot a system or access a physical drive.
 
-## Planned offline Wi-Fi setup on the EeePC
+## Future NetworkManager integration
 
-The next rescue and deployment media must include NetworkManager with its `nmtui` interface, the D-Bus service integration, and `wpa_supplicant` as its Wi-Fi backend. Build and stage the packages and their runtime dependencies against the Genesis ABI before generating the images. Use the verified hardware interfaces `enp1s0` and `wlp2s0` for acceptance.
+NetworkManager with `nmtui` is a future option for managing multiple Wi-Fi networks. Its D-Bus integration and `wpa_supplicant` backend need to be packaged and tested against the Genesis ABI. The guided installer currently writes Wi-Fi configuration for `wpa_supplicant` and systemd-networkd. The verified EeePC interfaces are `enp1s0` and `wlp2s0`.
 
 NetworkManager will handle Wi-Fi authentication and DHCP on the EeePC. Disable networkd on this image only after confirming NetworkManager is installed and configured to take over its interfaces. Check resolver integration with the existing Genesis setup. Keep Wi-Fi credentials out of the build inputs and published images.
 
 Acceptance on the physical EeePC: open `nmtui`, activate a test Wi-Fi network, confirm IPv4 via DHCP and DNS resolution, then reach the LAN endpoint on Neris-A. Repeat after reboot on the deployment target. These are pending tasks.
+
+## Console installation media with guided target setup
+
+Build one pair per profile. Use a prepared distribution rootfs with an
+administrator login for the installer, matching kernel modules, and the
+target's systemd, Python and account tools. Keep personal passwords, SSH
+keys, machine identity and Wi-Fi credentials out of the staged rootfs.
+The EeePC media should use the hardware-tested framebuffer/UVC kernel and
+touchpad udev rule. The 32-bit profile requires a native i686 rootfs.
+
+```bash
+sudo unshare --mount --propagation private scripts/build-install-media.sh \
+  eeepc1005p "$sealed_rootfs" "$kernel" "$deploy_mib" "$new_output" "$offline_catalog"
+```
+
+The profile names are `generic32`, `generic64` and `eeepc1005p`. The builder
+produces a console deployment image, a bootable installer image containing
+the deployment image, and `SHA256SUMS` for that profile. Both images start
+in the local console. Add an optional offline catalog with independently
+checksummed directories named `x11`, `fluxbox`, `wifi` and `extras`. Each group
+contains its `.ainpkg` files and a `SHA256SUMS` listing them in install order.
+Use X11 dependency packages in the `x11` group and the Fluxbox package in the
+`fluxbox` group. Optional package selections should include any prerequisites
+from the same catalog. Download the upstream sources and build the packages
+on Baihu or in a matching Genesis VM ahead of time. The installer reads
+the media's catalog. Each package must match the target architecture,
+glibc version and CPU baseline.
+
+After booting the installer USB and logging in as its administrator, select
+the whole target disk from `/dev/disk/by-id`. Start with the preview, then
+repeat the command with `--apply --configure`. The confirmation names the
+disk that will be erased.
+
+```bash
+cd /opt/ainow-install
+read -r digest _ < SHA256SUMS
+ls -l /dev/disk/by-id/
+read -r -p 'Whole-disk path: ' target_disk
+ainstall --image "$PWD/deploy.img" --sha256 "$digest" --disk "$target_disk"
+ainstall --image "$PWD/deploy.img" --sha256 "$digest" --disk "$target_disk" \
+  --apply --configure
+```
+
+Setup runs with the freshly written target mounted. Select Console, X11
+with xterm, or X11 with Fluxbox. Configure locale, timezone, optional manual
+system date/time, a local user and password, and WPA2-Personal Wi-Fi with
+DHCP. Special locales require glibc locale sources in the target. Wi-Fi
+requires wpa_supplicant, systemd-networkd and systemd-resolved. The installed
+system uses its own Wi-Fi credentials on first boot. Run the command printed
+by setup from a local console to start a selected X11 session.
+
+If setup stops after the image is verified, mount partition 1 of the selected
+disk in the installer environment and rerun `ainow-setup --root MOUNTPOINT`.
+Unmount that partition after setup finishes.
+
+The builders require the actual staged rootfs and matching kernel artifacts
+on the build host. Test a new image with a disposable QEMU disk first,
+including the guided setup and a separate boot of the installed disk. Then
+verify graphics, Wi-Fi association, DHCP and DNS on the physical EeePC.
